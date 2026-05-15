@@ -1,12 +1,39 @@
-# vision-asst — Real-time Vision Assistant for the Visually Impaired
+# Vision Assistant
+vision-asst — Real-time Vision Assistant for the Visually Impaired
+
+
+## Client Set-up
+
+### Install
+```bash
+# Cli Installation
+curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
+
+# ESP32 Board Configuration
+arduino-cli config init
+arduino-cli config add board_manager.additional_urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+arduino-cli core update-index
+arduino-cli core install esp32:esp32
+```
+
+### Compile Check
+```bash
+arduino-cli compile --fqbn esp32:esp32:esp32 ./src/client/
+```
+
+
+## Server Set-up
+```bash
+
+```
+
+### Archtecture
 
 FastAPI WebSocket server that fronts an embedded vllm-omni
 `Qwen3-Omni-30B-A3B-Instruct` MoE model on two RTX Pro 5000 Blackwell GPUs.
 Clients stream microphone PCM and camera JPEG frames over a single
 WebSocket; the server streams synthesized speech back as PCM chunks with
 turn-level barge-in.
-
-## Architecture
 
 ```
                     ┌──────────────────────────────────────┐
@@ -25,14 +52,14 @@ Single Python process — `python -m vision_asst` boots Uvicorn; FastAPI's
 lifespan loads the omni engine on both GPUs and only opens `/ws` after
 `/health` reports `ready`.
 
-## Requirements
+### Requirements
 
 - 2 × RTX Pro 5000 Blackwell (Tensor parallel = 2)
 - Python ≥ 3.12, CUDA 12.x
 - Dependencies are pinned in `pyproject.toml`; install with `uv sync` or
   `pip install -e .[dev]`.
 
-## Running
+### Running
 
 ```bash
 # 1. install deps
@@ -48,7 +75,7 @@ curl http://localhost:8000/health
 Override defaults via `VA_*` env vars or CLI flags — see `configs/default.env`
 and `./run.sh --help`.
 
-## WebSocket protocol (`/ws`)
+### WebSocket protocol (`/ws`)
 
 ### Client → server
 - **Binary** frames have a tag byte then payload:
@@ -64,7 +91,7 @@ and `./run.sh --help`.
 | `system`         | `{type, prompt}` — override the system prompt for the session  |
 | `bye`            | Close the session                                              |
 
-### Server → client
+#### Server → client
 - **Binary**: tag `0x81` then PCM16 mono LE @ 24 kHz audio chunks.
 - **Text** JSON messages:
 
@@ -78,7 +105,7 @@ and `./run.sh --help`.
 | `turn.end`    | `{turn_id, reason: complete\|cancelled\|interrupted\|error}` |
 | `error`       | `{code, message}`                                          |
 
-### Always-on duplex with barge-in
+#### Always-on duplex with barge-in
 
 The server runs WebRTC VAD on the inbound audio stream. After ≥ `MIN_VOICED_MS`
 of voiced audio followed by ≥ `SILENCE_MS` of silence, the buffered audio
@@ -90,7 +117,7 @@ the active request is aborted (`engine.abort`) and a fresh turn starts —
 clients should treat any remaining `0x81` audio bytes after `turn.end
 reason=interrupted` as stale.
 
-## Configuration
+### Configuration
 
 All tunables are environment variables prefixed with `VA_`. The most
 important ones:
@@ -111,7 +138,7 @@ important ones:
 | `VA_IDLE_TIMEOUT_S`          | `300`                                | close sockets that fall silent       |
 | `VA_WS_MAX_SIZE`             | `1048576` (1 MiB)                    | per-frame envelope cap               |
 
-### Per-frame protocol limits (enforced server-side)
+#### Per-frame protocol limits (enforced server-side)
 
 | Frame type   | Cap          | What happens on overflow                |
 | ------------ | ------------ | --------------------------------------- |
@@ -121,7 +148,7 @@ important ones:
 
 JPEGs are also lightly validated (SOI/EOI markers) before being buffered.
 
-## Deployment
+### Deployment
 
 This service ships **without** authentication, TLS, or origin checks — put
 it behind a reverse proxy (nginx, Caddy, Traefik) that:
@@ -138,7 +165,7 @@ before exposing the service publicly:
 uv pip install pip-audit && uv run pip-audit -r <(uv export --no-emit-project)
 ```
 
-## Testing
+### Testing
 
 ```bash
 uv run pytest -q          # unit tests (CPU only — engine is faked)
@@ -149,7 +176,7 @@ Tests cover the WebSocket framing, audio ring buffer, WebRTC VAD wrapper,
 JPEG frame buffer, and a full session lifecycle (turn → cancel → bye)
 driven by `FakeOmniEngine`.
 
-## Layout
+### Layout
 
 ```
 src/vision_asst/
