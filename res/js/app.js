@@ -12,14 +12,79 @@
 'use strict';
 
 // ─── DOM refs ────────────────────────────────────────────────────────────────
-const video        = document.getElementById('video');
+const video          = document.getElementById('video');
 const camPlaceholder = document.getElementById('cam-placeholder');
-const recDot       = document.getElementById('rec-dot');
-const statusDot    = document.getElementById('status-dot');
-const messages     = document.getElementById('messages');
-const btnToggle    = document.getElementById('btn-toggle');
-const micRing      = document.getElementById('mic-ring');
-const micBarEls    = document.querySelectorAll('#mic-bars span');
+const recDot         = document.getElementById('rec-dot');
+const statusDot      = document.getElementById('status-dot');
+const messages       = document.getElementById('messages');
+const btnToggle      = document.getElementById('btn-toggle');
+const micRing        = document.getElementById('mic-ring');
+const micBarEls      = document.querySelectorAll('#mic-bars span');
+
+// ─── Camera color extraction ──────────────────────────────────────────────────
+// Tiny canvas — samples average color from camera feed → drives CSS ambient light
+const _colorCvs = document.createElement('canvas');
+_colorCvs.width  = 16;
+_colorCvs.height = 12;
+const _colorCtx = _colorCvs.getContext('2d', { willReadFrequently: true });
+
+function startColorExtraction() {
+  let timer = null;
+
+  function extract() {
+    try {
+      if (video.readyState >= 2) {
+        _colorCtx.drawImage(video, 0, 0, 16, 12);
+        const d = _colorCtx.getImageData(0, 0, 16, 12).data;
+        let r = 0, g = 0, b = 0;
+        const n = d.length / 4;
+        for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i+1]; b += d[i+2]; }
+        r = Math.round(r / n);
+        g = Math.round(g / n);
+        b = Math.round(b / n);
+
+        // Boost saturation so orbs are visible even in grey/dark scenes
+        const avg = (r + g + b) / 3;
+        const boost = 2.2;
+        r = Math.min(255, Math.round(avg + (r - avg) * boost));
+        g = Math.min(255, Math.round(avg + (g - avg) * boost));
+        b = Math.min(255, Math.round(avg + (b - avg) * boost));
+        // Ensure minimum brightness so orbs are never invisible
+        const minBrightness = 60;
+        r = Math.max(minBrightness, r);
+        g = Math.max(minBrightness, g);
+        b = Math.max(minBrightness, b);
+
+        // Primary orb — dominant camera color
+        document.documentElement.style.setProperty('--cam-r', r);
+        document.documentElement.style.setProperty('--cam-g', g);
+        document.documentElement.style.setProperty('--cam-b', b);
+        // Secondary orb — hue-rotated variant (swap channels)
+        document.documentElement.style.setProperty('--cam-r2', Math.min(255, Math.round(b * 0.9)));
+        document.documentElement.style.setProperty('--cam-g2', Math.min(255, Math.round(r * 0.7 + 30)));
+        document.documentElement.style.setProperty('--cam-b2', Math.min(255, Math.round(g * 1.1 + 40)));
+      }
+    } catch (_) { /* cross-origin or video not ready */ }
+    timer = setTimeout(extract, 600);
+  }
+
+  timer = setTimeout(extract, 800); // slight delay to let video stabilize
+  return () => clearTimeout(timer); // returns a stop function
+}
+
+function stopColorExtraction() {
+  if (state.stopColorExtraction) {
+    state.stopColorExtraction();
+    state.stopColorExtraction = null;
+  }
+  // Reset to CSS @property initial values (handled automatically)
+  document.documentElement.style.removeProperty('--cam-r');
+  document.documentElement.style.removeProperty('--cam-g');
+  document.documentElement.style.removeProperty('--cam-b');
+  document.documentElement.style.removeProperty('--cam-r2');
+  document.documentElement.style.removeProperty('--cam-g2');
+  document.documentElement.style.removeProperty('--cam-b2');
+}
 
 // ─── State ───────────────────────────────────────────────────────────────────
 const state = {
@@ -34,8 +99,9 @@ const state = {
   nextPlayTime:     0,
   currentUserMsg:   null,   // active user message element
   currentModelMsg:  null,   // active model message element
-  modelMsgText:     '',     // accumulated model transcript so far
-  manualDisconnect: false,  // true only when user explicitly disconnects
+  modelMsgText:        '',     // accumulated model transcript so far
+  manualDisconnect:    false,  // true only when user explicitly disconnects
+  stopColorExtraction: null,   // cleanup fn returned by startColorExtraction()
 };
 
 const BAR_COUNT = 12;
@@ -154,6 +220,8 @@ async function setupCamera() {
     });
     video.srcObject = state.videoStream;
     camPlaceholder.style.display = 'none';
+    // Begin sampling camera pixels → update CSS ambient color vars
+    state.stopColorExtraction = startColorExtraction();
   } catch (err) {
     console.warn('Camera unavailable:', err);
   }
@@ -369,11 +437,19 @@ function scrollToBottom() {
 }
 
 function applyScrollBlur() {
+  const allMsgs = messages.querySelectorAll('.message');
+
+  // No scroll has happened yet — clear any residual blur and exit
+  if (messages.scrollTop < 10) {
+    allMsgs.forEach((msg) => { msg.style.opacity = ''; msg.style.filter = ''; });
+    return;
+  }
+
   const containerTop = messages.getBoundingClientRect().top;
-  messages.querySelectorAll('.message').forEach((msg) => {
-    const rect      = msg.getBoundingClientRect();
-    const distBottom = rect.bottom - containerTop; // distance of bottom edge from container top
-    const fadeZone  = 90;
+  allMsgs.forEach((msg) => {
+    const rect       = msg.getBoundingClientRect();
+    const distBottom = rect.bottom - containerTop; // bottom edge distance from container top
+    const fadeZone   = 90;
     if (distBottom < fadeZone && distBottom > 0) {
       const t = Math.max(0, distBottom / fadeZone);
       msg.style.opacity = t;
@@ -416,6 +492,7 @@ function teardown() {
   recDot.classList.remove('active');
   micRing.classList.remove('active');
   micBarEls.forEach((b) => (b.style.height = ''));
+  stopColorExtraction();   // clear color extraction loop and CSS vars
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
