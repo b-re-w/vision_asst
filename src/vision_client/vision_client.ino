@@ -1,464 +1,344 @@
 /*
  * ============================================
- *  XIAO ESP32-S3 Sense + DFR0954
- *  WiFi 인터넷 라디오 + 시리얼 명령 컨트롤
+ *  XIAO ESP32-S3 Sense — 비전 어시스턴트 클라이언트
+ *  Vision Assistant Device for Visually Impaired
  * ============================================
  *
- *  배선:
- *    DFR0954 VCC  → XIAO VUSB
- *    DFR0954 GND  → XIAO GND
- *    DFR0954 LRC  → XIAO D0  (GPIO1)
- *    DFR0954 BCLK → XIAO D1  (GPIO2)
- *    DFR0954 DIN  → XIAO D2  (GPIO3)
- *    버튼         → XIAO D3 ↔ GND
+ *  하드웨어:
+ *    온보드 OV3660 카메라
+ *    온보드 PDM 마이크 (GPIO 42=CLK, GPIO 41=DATA)
+ *    DFR0954 스피커  (GPIO 1=LRC, GPIO 2=BCLK, GPIO 3=DIN)
+ *    버튼             D3 (GPIO 4) ↔ GND
  *
- *  필수 라이브러리: ESP32-audioI2S by schreibfaul1
- *  필수 보드 설정:
- *    PSRAM: OPI PSRAM
- *    Partition Scheme: Huge APP (3MB No OTA/1MB SPIFFS)
+ *  필수 라이브러리:
+ *    ArduinoWebsockets by gilmaimon
  *
- *  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- *  📟 시리얼 명령어 (Serial Monitor에 입력):
- *  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- *    v <0-21>   : 음량 설정      (예: v 15)
- *    +          : 음량 +1
- *    -          : 음량 -1
- *    n          : 다음 채널
- *    p          : 이전 채널
- *    c <번호>   : 특정 채널 선택  (예: c 2)
- *    s          : 정지
- *    r          : 재생 재개 (현재 채널)
- *    l          : 채널 목록 보기
- *    i          : 현재 상태 정보
- *    h          : 도움말
- *  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ *  Arduino IDE 보드 세팅:
+ *    Board:     Seeed Studio XIAO ESP32S3
+ *    PSRAM:     OPI PSRAM
+ *    Partition: Huge APP (3MB No OTA/1MB SPIFFS)
+ *
+ *  WebSocket 바이너리 프로토콜:
+ *    ESP32 → 서버: [0x01][PCM 16kHz 16bit Mono]
+ *    ESP32 → 서버: [0x02][JPEG bytes]
+ *    서버 → ESP32: [0x01][PCM 24kHz 16bit Mono]
  */
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include "Audio.h"
+#include <ArduinoWebsockets.h>
+#include "esp_camera.h"
+#include <ESP_I2S.h>
+
+using namespace websockets;
+
+// ─────────────────────────────────────
+// 사용자 설정 (수정 필요)
+// ─────────────────────────────────────
+#define WIFI_SSID      "your-ssid"
+#define WIFI_PASSWORD  "your-password"
+#define WS_SERVER_URL  "ws://192.168.1.100:8000/ws"
 
 // ─────────────────────────────────────
 // 핀 정의
 // ─────────────────────────────────────
-#define PIN_I2S_LRC   1
-#define PIN_I2S_BCLK  2
-#define PIN_I2S_DIN   3
-#define PIN_BUTTON    4
+#define PIN_SPK_BCLK   2
+#define PIN_SPK_LRC    1
+#define PIN_SPK_DIN    3
+#define PIN_MIC_CLK    42
+#define PIN_MIC_DATA   41
+#define PIN_BUTTON     4
+
+// 카메라 핀 (XIAO ESP32-S3 Sense 고정)
+#define CAM_PIN_PWDN   -1
+#define CAM_PIN_RESET  -1
+#define CAM_PIN_XCLK   9
+#define CAM_PIN_SIOD   40
+#define CAM_PIN_SIOC   39
+#define CAM_PIN_D7     11
+#define CAM_PIN_D6     10
+#define CAM_PIN_D5     12
+#define CAM_PIN_D4     14
+#define CAM_PIN_D3     16
+#define CAM_PIN_D2     18
+#define CAM_PIN_D1     17
+#define CAM_PIN_D0     15
+#define CAM_PIN_VSYNC  38
+#define CAM_PIN_HREF   47
+#define CAM_PIN_PCLK   13
 
 // ─────────────────────────────────────
-// WiFi 설정
+// 오디오 / 카메라 설정
 // ─────────────────────────────────────
-const char* WIFI_SSID     = "TP-Link_ECA4";
-const char* WIFI_PASSWORD = "92102071";
+#define MIC_SAMPLE_RATE   16000
+#define SPK_SAMPLE_RATE   24000
+#define MIC_CHUNK_MS      20
+#define MIC_CHUNK_BYTES   (MIC_SAMPLE_RATE / 1000 * MIC_CHUNK_MS * 2)  // 640
 
-// ─────────────────────────────────────
-// 라디오 채널 목록
-// ─────────────────────────────────────
-struct RadioStation {
-  const char* url;
-  const char* name;
-};
-
-const RadioStation STREAMS[] = {
-  { "http://stream.live.vc.bbcmedia.co.uk/bbc_world_service",
-    "BBC World Service" },
-  { "http://ice1.somafm.com/groovesalad-128-mp3",
-    "SomaFM Groove Salad (Chillout)" },
-  { "http://ice1.somafm.com/lush-128-mp3",
-    "SomaFM Lush (Vocal Chill)" },
-  { "http://ice1.somafm.com/dronezone-128-mp3",
-    "SomaFM Drone Zone (Ambient)" },
-};
-
-const int STREAM_COUNT = sizeof(STREAMS) / sizeof(STREAMS[0]);
-int currentStream = 0;
+#define CAM_INTERVAL_MS   200   // 5fps
 
 // ─────────────────────────────────────
-// 오디오 / 상태 변수
+// 프로토콜 타입 바이트
 // ─────────────────────────────────────
-Audio audio;
+#define MSG_AUDIO  0x01
+#define MSG_VIDEO  0x02
 
-#define DEFAULT_VOLUME  10
-#define VOLUME_MIN      0
-#define VOLUME_MAX      21
+// ─────────────────────────────────────
+// 기타
+// ─────────────────────────────────────
+#define DEBOUNCE_MS  500
 
-int  currentVolume = DEFAULT_VOLUME;
-bool isPlaying     = false;
+// ─────────────────────────────────────
+// 전역 변수
+// ─────────────────────────────────────
+WebsocketsClient wsClient;
+I2SClass         I2S_MIC;
+I2SClass         I2S_SPK;
 
-// 버튼 디바운싱
-unsigned long lastPressTime = 0;
-const unsigned long DEBOUNCE_MS = 500;
+bool             wsConnected   = false;
+bool             sessionActive = false;
+unsigned long    lastCamTime   = 0;
+unsigned long    lastPressTime = 0;
 
-// 시리얼 입력 버퍼
-String serialBuffer = "";
+// 마이크 전송 버퍼: [타입 헤더 1바이트] + [PCM]
+uint8_t micSendBuf[1 + MIC_CHUNK_BYTES];
+
+// ============================================
+// 카메라 초기화
+// ============================================
+bool initCamera() {
+  camera_config_t cfg = {};
+  cfg.ledc_channel  = LEDC_CHANNEL_0;
+  cfg.ledc_timer    = LEDC_TIMER_0;
+  cfg.pin_d0 = CAM_PIN_D0; cfg.pin_d1 = CAM_PIN_D1;
+  cfg.pin_d2 = CAM_PIN_D2; cfg.pin_d3 = CAM_PIN_D3;
+  cfg.pin_d4 = CAM_PIN_D4; cfg.pin_d5 = CAM_PIN_D5;
+  cfg.pin_d6 = CAM_PIN_D6; cfg.pin_d7 = CAM_PIN_D7;
+  cfg.pin_xclk     = CAM_PIN_XCLK;
+  cfg.pin_pclk     = CAM_PIN_PCLK;
+  cfg.pin_vsync    = CAM_PIN_VSYNC;
+  cfg.pin_href     = CAM_PIN_HREF;
+  cfg.pin_sscb_sda = CAM_PIN_SIOD;
+  cfg.pin_sscb_scl = CAM_PIN_SIOC;
+  cfg.pin_pwdn     = CAM_PIN_PWDN;
+  cfg.pin_reset    = CAM_PIN_RESET;
+  cfg.xclk_freq_hz = 20000000;
+  cfg.pixel_format = PIXFORMAT_JPEG;
+  cfg.frame_size   = FRAMESIZE_QVGA;   // 320×240
+  cfg.jpeg_quality = 15;               // 0=최고, 63=최저
+  cfg.fb_count     = 2;
+  cfg.fb_location  = CAMERA_FB_IN_PSRAM;
+  cfg.grab_mode    = CAMERA_GRAB_WHEN_EMPTY;
+
+  if (esp_camera_init(&cfg) != ESP_OK) {
+    Serial.println("[CAM] 초기화 실패");
+    return false;
+  }
+  Serial.println("[CAM] 초기화 완료 (OV3660, QVGA, JPEG)");
+  return true;
+}
+
+// ============================================
+// 마이크 초기화 (I2S_NUM_0, PDM_RX, 16kHz)
+// ============================================
+bool initMicrophone() {
+  I2S_MIC.setPinsPdmRx(PIN_MIC_CLK, PIN_MIC_DATA);
+  if (!I2S_MIC.begin(I2S_MODE_PDM_RX, MIC_SAMPLE_RATE,
+                     I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO)) {
+    Serial.println("[MIC] 초기화 실패");
+    return false;
+  }
+  Serial.printf("[MIC] 초기화 완료 (%dHz, 16bit, Mono)\n", MIC_SAMPLE_RATE);
+  return true;
+}
+
+// ============================================
+// 스피커 초기화 (I2S_NUM_1, STD_TX, 24kHz)
+// MAX98357A는 혼합 모드(SD 미연결)이므로
+// STEREO로 설정하고 L=R=mono_sample 로 전송
+// ============================================
+bool initSpeaker() {
+  I2S_SPK.setPins(PIN_SPK_BCLK, PIN_SPK_LRC, PIN_SPK_DIN);
+  if (!I2S_SPK.begin(I2S_MODE_STD, SPK_SAMPLE_RATE,
+                     I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO)) {
+    Serial.println("[SPK] 초기화 실패");
+    return false;
+  }
+  Serial.printf("[SPK] 초기화 완료 (%dHz, 16bit, Stereo→Mono)\n", SPK_SAMPLE_RATE);
+  return true;
+}
 
 // ============================================
 // WiFi 연결
 // ============================================
 void connectWiFi() {
-  Serial.print("WiFi 연결 중 [");
-  Serial.print(WIFI_SSID);
-  Serial.print("] ");
-
+  Serial.printf("[WiFi] 연결 중 [%s]", WIFI_SSID);
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
   int retry = 0;
-  while (WiFi.status() != WL_CONNECTED && retry < 30) {
+  while (WiFi.status() != WL_CONNECTED && retry < 40) {
     delay(500);
     Serial.print(".");
     retry++;
   }
-
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println(" ✅ 연결됨!");
-    Serial.print("IP 주소: ");
-    Serial.println(WiFi.localIP());
-    Serial.print("신호 강도: ");
-    Serial.print(WiFi.RSSI());
-    Serial.println(" dBm");
+    Serial.printf("\n[WiFi] 연결됨 | IP: %s | RSSI: %d dBm\n",
+                  WiFi.localIP().toString().c_str(), WiFi.RSSI());
   } else {
-    Serial.println(" ❌ 연결 실패!");
+    Serial.println("\n[WiFi] 연결 실패 → 재시작");
+    ESP.restart();
   }
 }
 
 // ============================================
-// 스트림 재생
+// WebSocket 연결
 // ============================================
-void playStream(int index) {
-  if (index < 0 || index >= STREAM_COUNT) {
-    Serial.println("❌ 잘못된 채널 번호!");
+void connectWebSocket() {
+  // ── 수신 콜백 ────────────────────────────
+  wsClient.onMessage([](WebsocketsMessage msg) {
+    if (!msg.isBinary() || msg.length() < 2) return;
+
+    const uint8_t* data       = (const uint8_t*)msg.c_str();
+    const uint8_t* payload    = data + 1;
+    size_t         payloadLen = msg.length() - 1;
+
+    if (data[0] != MSG_AUDIO || payloadLen < 2) return;
+
+    // Gemini 출력: PCM 24kHz 16bit Mono (little-endian)
+    // MAX98357A 혼합 모드 대응: 각 mono 샘플을 L/R 양쪽에 복사
+    const int16_t* mono   = (const int16_t*)payload;
+    size_t         count  = payloadLen / 2;
+    int16_t*       stereo = (int16_t*)ps_malloc(count * 4);
+    if (!stereo) return;
+
+    for (size_t i = 0; i < count; i++) {
+      stereo[i * 2]     = mono[i];
+      stereo[i * 2 + 1] = mono[i];
+    }
+    I2S_SPK.write((const uint8_t*)stereo, count * 4);
+    free(stereo);
+  });
+
+  // ── 이벤트 콜백 ──────────────────────────
+  wsClient.onEvent([](WebsocketsEvent evt, String) {
+    switch (evt) {
+      case WebsocketsEvent::ConnectionOpened:
+        wsConnected = true;
+        Serial.println("[WS] 연결됨");
+        break;
+      case WebsocketsEvent::ConnectionClosed:
+        wsConnected   = false;
+        sessionActive = false;
+        Serial.println("[WS] 연결 끊김");
+        break;
+      case WebsocketsEvent::GotPing:
+        wsClient.pong();
+        break;
+    }
+  });
+
+  Serial.printf("[WS] 연결 중 [%s]\n", WS_SERVER_URL);
+  wsClient.connect(WS_SERVER_URL);
+}
+
+// ============================================
+// 마이크 청크 읽어서 WebSocket 전송
+// I2S_MIC.readBytes() 는 MIC_CHUNK_MS(~20ms) 동안 블로킹
+// ============================================
+void sendMicChunk() {
+  micSendBuf[0] = MSG_AUDIO;
+  size_t bytes = I2S_MIC.readBytes((char*)(micSendBuf + 1), MIC_CHUNK_BYTES);
+  if (bytes > 0) {
+    wsClient.sendBinary((const char*)micSendBuf, 1 + bytes);
+  }
+}
+
+// ============================================
+// 카메라 프레임 캡처 후 WebSocket 전송
+// ============================================
+void sendCameraFrame() {
+  camera_fb_t* fb = esp_camera_fb_get();
+  if (!fb) {
+    Serial.println("[CAM] 캡처 실패");
     return;
   }
 
-  currentStream = index;
-  isPlaying = true;
-
-  Serial.println("─────────────────────────────");
-  Serial.print("🎵 [채널 ");
-  Serial.print(index);
-  Serial.print("] ");
-  Serial.println(STREAMS[index].name);
-  Serial.print("   URL: ");
-  Serial.println(STREAMS[index].url);
-  Serial.println("─────────────────────────────");
-
-  audio.stopSong();
-  audio.connecttohost(STREAMS[index].url);
-}
-
-void nextStream() {
-  int next = (currentStream + 1) % STREAM_COUNT;
-  playStream(next);
-}
-
-void prevStream() {
-  int prev = (currentStream - 1 + STREAM_COUNT) % STREAM_COUNT;
-  playStream(prev);
-}
-
-// ============================================
-// 음량 설정
-// ============================================
-void setVolume(int vol) {
-  // 범위 제한
-  if (vol < VOLUME_MIN) vol = VOLUME_MIN;
-  if (vol > VOLUME_MAX) vol = VOLUME_MAX;
-
-  currentVolume = vol;
-  audio.setVolume(currentVolume);
-
-  // 음량 시각화 막대 (▮▮▮▮▮▯▯▯▯▯)
-  Serial.print("🔊 음량: ");
-  Serial.print(currentVolume);
-  Serial.print("/");
-  Serial.print(VOLUME_MAX);
-  Serial.print("  [");
-
-  int bars = map(currentVolume, 0, VOLUME_MAX, 0, 21);
-  for (int i = 0; i < 21; i++) {
-    Serial.print(i < bars ? "▮" : "▯");
+  uint8_t* buf = (uint8_t*)ps_malloc(1 + fb->len);
+  if (buf) {
+    buf[0] = MSG_VIDEO;
+    memcpy(buf + 1, fb->buf, fb->len);
+    wsClient.sendBinary((const char*)buf, 1 + fb->len);
+    free(buf);
   }
-  Serial.println("]");
+  esp_camera_fb_return(fb);
 }
 
 // ============================================
-// 정지 / 재생
+// 버튼 처리 — 누를 때마다 세션 시작/중지 토글
 // ============================================
-void stopAudio() {
-  audio.stopSong();
-  isPlaying = false;
-  Serial.println("⏸️  정지됨");
-}
+void handleButton() {
+  if (digitalRead(PIN_BUTTON) != LOW) return;
+  unsigned long now = millis();
+  if (now - lastPressTime < DEBOUNCE_MS) return;
+  lastPressTime = now;
 
-void resumeAudio() {
-  if (!isPlaying) {
-    Serial.println("▶️  재생 재개...");
-    playStream(currentStream);
-  } else {
-    Serial.println("이미 재생 중입니다.");
-  }
+  sessionActive = !sessionActive;
+  Serial.println(sessionActive ? "[BTN] 세션 시작 ▶" : "[BTN] 세션 중지 ■");
 }
 
 // ============================================
-// 채널 목록 출력
-// ============================================
-void printChannelList() {
-  Serial.println("\n📻 채널 목록:");
-  Serial.println("─────────────────────────────");
-  for (int i = 0; i < STREAM_COUNT; i++) {
-    Serial.print(i == currentStream ? " ▶ " : "   ");
-    Serial.print("[");
-    Serial.print(i);
-    Serial.print("] ");
-    Serial.println(STREAMS[i].name);
-  }
-  Serial.println("─────────────────────────────\n");
-}
-
-// ============================================
-// 현재 상태 출력
-// ============================================
-void printStatus() {
-  Serial.println("\n📊 현재 상태:");
-  Serial.println("─────────────────────────────");
-  Serial.print("  상태  : ");
-  Serial.println(isPlaying ? "▶️  재생 중" : "⏸️  정지");
-  Serial.print("  채널  : [");
-  Serial.print(currentStream);
-  Serial.print("] ");
-  Serial.println(STREAMS[currentStream].name);
-  Serial.print("  음량  : ");
-  Serial.print(currentVolume);
-  Serial.print("/");
-  Serial.println(VOLUME_MAX);
-  Serial.print("  WiFi  : ");
-  Serial.print(WiFi.RSSI());
-  Serial.println(" dBm");
-  Serial.print("  IP    : ");
-  Serial.println(WiFi.localIP());
-  Serial.println("─────────────────────────────\n");
-}
-
-// ============================================
-// 도움말 출력
-// ============================================
-void printHelp() {
-  Serial.println("\n📖 사용 가능한 명령어:");
-  Serial.println("─────────────────────────────");
-  Serial.println("  v <0-21>  : 음량 설정 (예: v 15)");
-  Serial.println("  +         : 음량 +1");
-  Serial.println("  -         : 음량 -1");
-  Serial.println("  n         : 다음 채널");
-  Serial.println("  p         : 이전 채널");
-  Serial.println("  c <번호>  : 특정 채널 선택 (예: c 2)");
-  Serial.println("  s         : 정지");
-  Serial.println("  r         : 재생 재개");
-  Serial.println("  l         : 채널 목록 보기");
-  Serial.println("  i         : 현재 상태 정보");
-  Serial.println("  h         : 도움말 (이 화면)");
-  Serial.println("─────────────────────────────\n");
-}
-
-// ============================================
-// 시리얼 명령 처리
-// ============================================
-void handleCommand(String cmd) {
-  cmd.trim();           // 앞뒤 공백 제거
-  if (cmd.length() == 0) return;
-
-  Serial.print("\n>> 명령: ");
-  Serial.println(cmd);
-
-  // 첫 글자로 명령 분류
-  char c = cmd.charAt(0);
-
-  switch (c) {
-
-    // 음량 설정: "v 15"
-    case 'v':
-    case 'V': {
-      if (cmd.length() > 2) {
-        int vol = cmd.substring(2).toInt();
-        setVolume(vol);
-      } else {
-        Serial.println("❓ 사용법: v <0-21>  예) v 15");
-      }
-      break;
-    }
-
-    // 음량 +1
-    case '+':
-      setVolume(currentVolume + 1);
-      break;
-
-    // 음량 -1
-    case '-':
-      setVolume(currentVolume - 1);
-      break;
-
-    // 다음 채널
-    case 'n':
-    case 'N':
-      nextStream();
-      break;
-
-    // 이전 채널
-    case 'p':
-    case 'P':
-      prevStream();
-      break;
-
-    // 특정 채널: "c 2"
-    case 'c':
-    case 'C': {
-      if (cmd.length() > 2) {
-        int ch = cmd.substring(2).toInt();
-        playStream(ch);
-      } else {
-        Serial.println("❓ 사용법: c <채널번호>  예) c 2");
-      }
-      break;
-    }
-
-    // 정지
-    case 's':
-    case 'S':
-      stopAudio();
-      break;
-
-    // 재생 재개
-    case 'r':
-    case 'R':
-      resumeAudio();
-      break;
-
-    // 채널 목록
-    case 'l':
-    case 'L':
-      printChannelList();
-      break;
-
-    // 상태 정보
-    case 'i':
-    case 'I':
-      printStatus();
-      break;
-
-    // 도움말
-    case 'h':
-    case 'H':
-    case '?':
-      printHelp();
-      break;
-
-    default:
-      Serial.print("❓ 알 수 없는 명령: ");
-      Serial.println(cmd);
-      Serial.println("   'h' 입력해서 도움말 확인하세요.");
-      break;
-  }
-}
-
-// ============================================
-// 시리얼 입력 읽기 (논블로킹)
-//   엔터(\n)가 들어올 때까지 글자 모으기
-// ============================================
-void readSerialInput() {
-  while (Serial.available() > 0) {
-    char c = Serial.read();
-
-    if (c == '\n' || c == '\r') {
-      // 엔터 → 명령 실행
-      if (serialBuffer.length() > 0) {
-        handleCommand(serialBuffer);
-        serialBuffer = "";
-      }
-    } else {
-      // 일반 글자 → 버퍼에 추가
-      serialBuffer += c;
-    }
-  }
-}
-
-// ============================================
-// 초기 설정
+// setup
 // ============================================
 void setup() {
   Serial.begin(115200);
-  delay(1000);
+  delay(500);
 
-  Serial.println("\n========================================");
-  Serial.println("  XIAO ESP32-S3 + DFR0954 라디오");
-  Serial.println("  (시리얼 명령 컨트롤 버전)");
-  Serial.println("========================================");
+  Serial.println("\n================================");
+  Serial.println("  비전 어시스턴트 클라이언트");
+  Serial.println("================================");
 
-  // 버튼 설정
   pinMode(PIN_BUTTON, INPUT_PULLUP);
 
-  // WiFi 연결
+  if (!initCamera())     { Serial.println("HALT: 카메라"); while (1) delay(1000); }
+  if (!initMicrophone()) { Serial.println("HALT: 마이크"); while (1) delay(1000); }
+  if (!initSpeaker())    { Serial.println("HALT: 스피커"); while (1) delay(1000); }
+
   connectWiFi();
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi 없이는 동작 불가. 정지.");
-    while (1) delay(1000);
-  }
+  connectWebSocket();
 
-  // 오디오 초기화
-  audio.setPinout(PIN_I2S_BCLK, PIN_I2S_LRC, PIN_I2S_DIN);
-  audio.setVolume(currentVolume);
-
-  // 안내 메시지
-  Serial.println("\n[준비 완료]");
-  Serial.println("  • 버튼: 다음 채널");
-  Serial.println("  • 시리얼: 'h' 입력해서 명령어 확인");
-  Serial.println();
-
-  // 첫 채널 자동 재생
-  playStream(currentStream);
+  Serial.println("\n[준비 완료] 버튼을 눌러 세션을 시작하세요.");
 }
 
 // ============================================
-// 메인 루프
+// loop
 // ============================================
 void loop() {
-  // 1. 오디오 처리 (필수, 끊김없이 호출)
-  audio.loop();
+  // 1. WebSocket 수신 처리 (오디오 콜백 트리거)
+  if (wsConnected) wsClient.poll();
 
-  // 2. 시리얼 입력 처리
-  readSerialInput();
+  // 2. 버튼
+  handleButton();
 
-  // 3. 버튼 처리 (다음 채널)
-  if (digitalRead(PIN_BUTTON) == LOW) {
+  // 3. 세션 활성 중 데이터 전송
+  if (sessionActive && wsConnected) {
+    // 마이크: ~20ms 블로킹 read → 즉시 전송
+    sendMicChunk();
+
+    // 카메라: 200ms 간격 (5fps)
     unsigned long now = millis();
-    if (now - lastPressTime > DEBOUNCE_MS) {
-      lastPressTime = now;
-      Serial.println("\n[🔘 버튼] 다음 채널");
-      nextStream();
+    if (now - lastCamTime >= CAM_INTERVAL_MS) {
+      lastCamTime = now;
+      sendCameraFrame();
     }
   }
 
-  // 4. WiFi 끊김 감지 시 재연결
+  // 4. 재연결
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi 끊김. 재연결 시도...");
+    Serial.println("[WiFi] 끊김 → 재연결");
     connectWiFi();
+  } else if (!wsConnected) {
+    Serial.println("[WS] 재연결 대기...");
+    delay(3000);
+    connectWebSocket();
   }
-}
-
-// ============================================
-// 오디오 라이브러리 콜백
-// ============================================
-void audio_showstreamtitle(const char *info) {
-  Serial.print("📻 지금 재생: ");
-  Serial.println(info);
-}
-
-void audio_showstation(const char *info) {
-  Serial.print("📡 방송국: ");
-  Serial.println(info);
-}
-
-void audio_bitrate(const char *info) {
-  Serial.print("🎚️  비트레이트: ");
-  Serial.println(info);
 }

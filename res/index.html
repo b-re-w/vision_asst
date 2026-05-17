@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vision Assistant</title>
+  <style>
+    /* ── Reset ──────────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    /* ── Base ───────────────────────────────────────────────────────────── */
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: #080c14;
+      color: rgba(255, 255, 255, 0.82);
+      height: 100dvh;
+      overflow: hidden;
+    }
+
+    /* ── Scene (full-page) ──────────────────────────────────────────────── */
+    .scene {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background:
+        radial-gradient(ellipse 70% 55% at 15% 40%, rgba(72, 40, 130, 0.14) 0%, transparent 65%),
+        radial-gradient(ellipse 55% 50% at 85% 65%, rgba(20, 70, 120, 0.10) 0%, transparent 65%),
+        radial-gradient(ellipse 40% 40% at 50% 10%, rgba(60, 20, 100, 0.08) 0%, transparent 60%),
+        #080c14;
+    }
+
+    /* subtle star dust */
+    .scene::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image:
+        radial-gradient(1px 1px at 18%  28%, rgba(255,255,255,0.14) 0%, transparent 100%),
+        radial-gradient(1px 1px at 62%  72%, rgba(255,255,255,0.09) 0%, transparent 100%),
+        radial-gradient(1px 1px at 81%  19%, rgba(255,255,255,0.11) 0%, transparent 100%),
+        radial-gradient(1px 1px at 38%  83%, rgba(255,255,255,0.07) 0%, transparent 100%),
+        radial-gradient(1px 1px at 91%  47%, rgba(255,255,255,0.09) 0%, transparent 100%),
+        radial-gradient(1px 1px at 9%   61%, rgba(255,255,255,0.06) 0%, transparent 100%),
+        radial-gradient(1px 1px at 74%  34%, rgba(255,255,255,0.08) 0%, transparent 100%),
+        radial-gradient(1px 1px at 46%  11%, rgba(255,255,255,0.10) 0%, transparent 100%);
+      pointer-events: none;
+    }
+
+    /* ── Container (main card) ──────────────────────────────────────────── */
+    .container {
+      position: relative;
+      width: min(460px, 96vw);
+      height: min(820px, 96dvh);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      padding: 20px 20px 18px;
+      background: rgba(255, 255, 255, 0.025);
+      backdrop-filter: blur(48px) saturate(160%);
+      -webkit-backdrop-filter: blur(48px) saturate(160%);
+      border: 1px solid rgba(255, 255, 255, 0.055);
+      border-radius: 28px;
+      box-shadow:
+        0 0 0 1px rgba(255, 255, 255, 0.018),
+        0 8px 40px rgba(0, 0, 0, 0.55),
+        0 0 100px rgba(90, 70, 180, 0.07),
+        inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+
+    /* ── Header ─────────────────────────────────────────────────────────── */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+
+    .logo {
+      font-size: 17px;
+      color: #8b7cf8;
+      filter: drop-shadow(0 0 7px rgba(139, 124, 248, 0.55));
+      animation: glow-pulse 3.5s ease-in-out infinite;
+      user-select: none;
+    }
+    @keyframes glow-pulse {
+      0%, 100% { filter: drop-shadow(0 0 5px rgba(139, 124, 248, 0.40)); }
+      50%       { filter: drop-shadow(0 0 14px rgba(139, 124, 248, 0.80)); }
+    }
+
+    .header h1 {
+      flex: 1;
+      font-size: 12px;
+      font-weight: 300;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.50);
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.18);
+      transition: background 0.5s, box-shadow 0.5s;
+      flex-shrink: 0;
+    }
+    .status-dot.connected {
+      background: #4ecdc4;
+      box-shadow: 0 0 8px rgba(78, 205, 196, 0.65);
+    }
+
+    /* ── Camera ─────────────────────────────────────────────────────────── */
+    .camera-section { flex-shrink: 0; }
+
+    .camera-frame {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      border-radius: 16px;
+      overflow: hidden;
+      background: rgba(0, 0, 0, 0.45);
+      border: 1px solid rgba(139, 124, 248, 0.18);
+      box-shadow:
+        0 0 0 1px rgba(139, 124, 248, 0.06),
+        0 4px 28px rgba(0, 0, 0, 0.45),
+        inset 0 0 50px rgba(139, 124, 248, 0.025);
+    }
+
+    .camera-frame video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .camera-placeholder {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      color: rgba(255, 255, 255, 0.18);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      pointer-events: none;
+    }
+    .camera-placeholder .icon { font-size: 28px; opacity: 0.4; }
+
+    .rec-dot {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #ff4757;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    .rec-dot.active {
+      opacity: 1;
+      animation: rec-blink 1.5s ease-in-out infinite;
+    }
+    @keyframes rec-blink {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.25; }
+    }
+
+    /* ── Chat ───────────────────────────────────────────────────────────── */
+    .chat-section {
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      position: relative;
+      /* fade-blur at the top */
+      mask-image: linear-gradient(to bottom, transparent 0%, rgba(0,0,0,0.6) 10%, black 22%);
+      -webkit-mask-image: linear-gradient(to bottom, transparent 0%, rgba(0,0,0,0.6) 10%, black 22%);
+    }
+
+    .chat-messages {
+      height: 100%;
+      overflow-y: auto;
+      padding: 6px 2px 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      scrollbar-width: none;
+    }
+    .chat-messages::-webkit-scrollbar { display: none; }
+
+    /* ── Message bubbles ─────────────────────────────────────────────────── */
+    .message {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      animation: msg-in 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+    @keyframes msg-in {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .message.user  { flex-direction: row-reverse; }
+
+    .avatar {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      flex-shrink: 0;
+      user-select: none;
+    }
+    .message.user  .avatar {
+      background: rgba(139, 124, 248, 0.12);
+      border: 1px solid rgba(139, 124, 248, 0.28);
+      color: #8b7cf8;
+    }
+    .message.model .avatar {
+      background: rgba(78, 205, 196, 0.08);
+      border: 1px solid rgba(78, 205, 196, 0.22);
+      color: #4ecdc4;
+    }
+
+    .bubble {
+      max-width: 78%;
+      padding: 10px 13px;
+      border-radius: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+    .message.user  .bubble {
+      background: rgba(139, 124, 248, 0.07);
+      border: 1px solid rgba(139, 124, 248, 0.16);
+      border-bottom-right-radius: 4px;
+    }
+    .message.model .bubble {
+      background: rgba(78, 205, 196, 0.05);
+      border: 1px solid rgba(78, 205, 196, 0.13);
+      border-bottom-left-radius: 4px;
+    }
+
+    /* ── Waveform bars ───────────────────────────────────────────────────── */
+    .waveform {
+      display: flex;
+      align-items: center;
+      gap: 2.5px;
+      height: 22px;
+    }
+    .waveform span {
+      display: inline-block;
+      width: 3px;
+      border-radius: 3px;
+      height: 5px;
+      transform-origin: bottom center;
+      transition: height 0.07s ease;
+    }
+    .message.user  .waveform span { background: rgba(139, 124, 248, 0.65); }
+    .message.model .waveform span { background: rgba(78,  205, 196, 0.65); }
+
+    .waveform.live span {
+      animation: bar-wave 1.1s ease-in-out infinite;
+    }
+    .waveform.live span:nth-child(1)  { animation-delay: 0.00s; }
+    .waveform.live span:nth-child(2)  { animation-delay: 0.10s; }
+    .waveform.live span:nth-child(3)  { animation-delay: 0.20s; }
+    .waveform.live span:nth-child(4)  { animation-delay: 0.14s; }
+    .waveform.live span:nth-child(5)  { animation-delay: 0.06s; }
+    .waveform.live span:nth-child(6)  { animation-delay: 0.24s; }
+    .waveform.live span:nth-child(7)  { animation-delay: 0.12s; }
+    .waveform.live span:nth-child(8)  { animation-delay: 0.18s; }
+    .waveform.live span:nth-child(9)  { animation-delay: 0.08s; }
+    .waveform.live span:nth-child(10) { animation-delay: 0.22s; }
+    .waveform.live span:nth-child(11) { animation-delay: 0.04s; }
+    .waveform.live span:nth-child(12) { animation-delay: 0.16s; }
+    @keyframes bar-wave {
+      0%, 100% { height: 3px;  opacity: 0.5; }
+      50%       { height: 20px; opacity: 1;   }
+    }
+
+    /* ── Transcript ──────────────────────────────────────────────────────── */
+    .transcript {
+      font-size: 13px;
+      font-weight: 300;
+      line-height: 1.55;
+      color: rgba(255, 255, 255, 0.72);
+      letter-spacing: 0.025em;
+    }
+
+    /* ── Controls ────────────────────────────────────────────────────────── */
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+
+    .btn-toggle {
+      flex: 1;
+      padding: 11px 16px;
+      border: 1px solid rgba(139, 124, 248, 0.28);
+      border-radius: 12px;
+      background: rgba(139, 124, 248, 0.10);
+      color: rgba(255, 255, 255, 0.75);
+      font-size: 12px;
+      font-weight: 400;
+      letter-spacing: 0.06em;
+      cursor: pointer;
+      transition: background 0.2s, box-shadow 0.2s, border-color 0.2s, opacity 0.2s;
+    }
+    .btn-toggle:hover:not(:disabled) {
+      background: rgba(139, 124, 248, 0.20);
+      box-shadow: 0 0 20px rgba(139, 124, 248, 0.18);
+    }
+    .btn-toggle:disabled { opacity: 0.35; cursor: not-allowed; }
+    .btn-toggle.live {
+      background: rgba(255, 71, 87, 0.08);
+      border-color: rgba(255, 71, 87, 0.28);
+      color: rgba(255, 120, 130, 0.90);
+    }
+
+    /* mic indicator ring */
+    .mic-ring {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      background: rgba(255, 255, 255, 0.03);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: border-color 0.3s, background 0.3s, box-shadow 0.3s;
+    }
+    .mic-ring.active {
+      border-color: rgba(78, 205, 196, 0.35);
+      background: rgba(78, 205, 196, 0.08);
+      box-shadow: 0 0 16px rgba(78, 205, 196, 0.20);
+    }
+
+    .mic-bars {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      height: 18px;
+    }
+    .mic-bars span {
+      display: block;
+      width: 2.5px;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(255, 255, 255, 0.22);
+      transition: height 0.07s, background 0.3s;
+    }
+    .mic-ring.active .mic-bars span { background: rgba(78, 205, 196, 0.80); }
+  </style>
+</head>
+<body>
+<div class="scene">
+  <div class="container">
+
+    <!-- Header -->
+    <header class="header">
+      <span class="logo">✦</span>
+      <h1>Vision Assistant</h1>
+      <div class="status-dot" id="status-dot"></div>
+    </header>
+
+    <!-- Camera -->
+    <section class="camera-section">
+      <div class="camera-frame">
+        <video id="video" autoplay playsinline muted></video>
+        <div class="camera-placeholder" id="cam-placeholder">
+          <span class="icon">⬛</span>
+          <span>카메라 연결 대기 중</span>
+        </div>
+        <div class="rec-dot" id="rec-dot"></div>
+      </div>
+    </section>
+
+    <!-- Chat -->
+    <section class="chat-section">
+      <div class="chat-messages" id="messages"></div>
+    </section>
+
+    <!-- Controls -->
+    <footer class="controls">
+      <button class="btn-toggle" id="btn-toggle">Connect</button>
+      <div class="mic-ring" id="mic-ring">
+        <div class="mic-bars" id="mic-bars">
+          <span></span><span></span><span></span><span></span><span></span>
+        </div>
+      </div>
+    </footer>
+
+  </div>
+</div>
+<script src="/res/js/app.js"></script>
+</body>
+</html>
