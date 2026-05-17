@@ -215,10 +215,33 @@ function onWsMessage(evt) {
 // ─── Camera ──────────────────────────────────────────────────────────────────
 async function setupCamera() {
   try {
-    state.videoStream = await navigator.mediaDevices.getUserMedia({
-      video: { width: 320, height: 240, facingMode: 'environment' },
-    });
-    video.srcObject = state.videoStream;
+    const params = new URLSearchParams(window.location.search);
+    const videoSrc = params.get('video');
+
+    if (videoSrc) {
+      // Use provided video instead of camera
+      video.src = videoSrc;
+      video.loop = false;
+      video.muted = true;
+      video.play();
+      
+      video.onended = () => {
+        if (isWsOpen()) {
+          state.manualDisconnect = true;
+          state.ws.close(1000, "Video ended");
+        }
+      };
+      
+      // Simulate video stream for the capture loop
+      state.videoStream = true; 
+    } else {
+      // Normal camera setup
+      state.videoStream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 320, height: 240, facingMode: 'environment' },
+      });
+      video.srcObject = state.videoStream;
+    }
+    
     camPlaceholder.style.display = 'none';
     // Begin sampling camera pixels → update CSS ambient color vars
     state.stopColorExtraction = startColorExtraction();
@@ -474,7 +497,9 @@ function teardown() {
   state.micStream?.getTracks().forEach((t) => t.stop());
   state.micStream = null;
 
-  state.videoStream?.getTracks().forEach((t) => t.stop());
+  if (state.videoStream && typeof state.videoStream.getTracks === 'function') {
+    state.videoStream.getTracks().forEach((t) => t.stop());
+  }
   state.videoStream = null;
 
   state.scriptProcessor?.disconnect();
@@ -488,6 +513,7 @@ function teardown() {
   state.currentModelMsg = null;
 
   video.srcObject = null;
+  video.removeAttribute('src');
   camPlaceholder.style.display = '';
   recDot.classList.remove('active');
   micRing.classList.remove('active');
