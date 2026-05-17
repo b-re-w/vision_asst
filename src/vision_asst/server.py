@@ -43,7 +43,7 @@ from google import genai
 from google.genai import types
 
 # ─── Paths ─────────────────────────────────────────────────────────────────────
-BASE_DIR = Path(__file__).parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 
 def _read_env_key(key: str) -> str:

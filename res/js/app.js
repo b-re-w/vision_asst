@@ -34,6 +34,7 @@ const state = {
   nextPlayTime:     0,
   currentUserMsg:   null,   // active user message element
   currentModelMsg:  null,   // active model message element
+  modelMsgText:     '',     // accumulated model transcript so far
 };
 
 const BAR_COUNT = 12;
@@ -118,11 +119,11 @@ function onWsMessage(evt) {
     case 'transcript':
       if (msg.role === 'input') {
         ensureUserMsg();
-        setTranscript(state.currentUserMsg, msg.text);
+        setTranscript(state.currentUserMsg, msg.text, false);
         sealUserMsg();
       } else if (msg.role === 'output') {
         ensureModelMsg();
-        setTranscript(state.currentModelMsg, msg.text);
+        setTranscript(state.currentModelMsg, msg.text, true);
       }
       break;
 
@@ -279,6 +280,7 @@ function sealModelMsg() {
   if (!state.currentModelMsg) return;
   setWaveformLive(state.currentModelMsg, false);
   state.currentModelMsg = null;
+  state.modelMsgText    = '';  // reset accumulator for next response
 }
 
 function setWaveformLive(msgEl, live) {
@@ -286,12 +288,35 @@ function setWaveformLive(msgEl, live) {
   msgEl.querySelector('.waveform')?.classList.toggle('live', live);
 }
 
-function setTranscript(msgEl, text) {
+function setTranscript(msgEl, text, isModel = false) {
   if (!msgEl) return;
   const t = msgEl.querySelector('.transcript');
   if (!t) return;
-  t.textContent = text;
   t.style.display = 'block';
+
+  if (!isModel) {
+    // User transcript: simple set (arrives once, fully formed)
+    t.textContent = text;
+    return;
+  }
+
+  // Model transcript: Gemini sends delta chunks — always append incoming text
+  const toAdd = text;
+  if (!toAdd) return;
+
+  state.modelMsgText += toAdd;
+
+  // Append each new character wrapped in an animated <span>
+  toAdd.split('').forEach((ch, i) => {
+    const span = document.createElement('span');
+    span.className = 'char-reveal';
+    // 30ms per character, capped at 450ms so long chunks don't drag
+    span.style.animationDelay = `${Math.min(i * 30, 450)}ms`;
+    span.textContent = ch;
+    t.appendChild(span);
+  });
+
+  scrollToBottom();
 }
 
 // Update user bubble waveform bars from microphone amplitude data
