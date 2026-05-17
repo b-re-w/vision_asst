@@ -23,8 +23,15 @@ arduino-cli compile --fqbn esp32:esp32:esp32 ./src/client/
 
 
 ## Server Set-up
-```bash
 
+### Env Sync
+```bash
+uv sync
+```
+
+### Run Server
+```bash
+uv run ./src/vision_asst/server.py  # open server on 12345 port
 ```
 
 ### Archtecture
