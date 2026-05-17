@@ -35,6 +35,7 @@ const state = {
   currentUserMsg:   null,   // active user message element
   currentModelMsg:  null,   // active model message element
   modelMsgText:     '',     // accumulated model transcript so far
+  manualDisconnect: false,  // true only when user explicitly disconnects
 };
 
 const BAR_COUNT = 12;
@@ -99,10 +100,22 @@ async function onWsOpen() {
 
 function onWsClose() {
   statusDot.classList.remove('connected');
-  btnToggle.textContent = 'Connect';
   btnToggle.classList.remove('live');
   btnToggle.disabled = false;
   teardown();
+
+  if (state.manualDisconnect) {
+    // User explicitly disconnected — stay disconnected
+    state.manualDisconnect = false;
+    btnToggle.textContent = 'Connect';
+  } else {
+    // Unexpected close (server restart, network hiccup) — auto-reconnect
+    btnToggle.textContent = 'Reconnecting…';
+    btnToggle.disabled = true;
+    setTimeout(() => {
+      if (!isWsOpen()) wsConnect();
+    }, 3000);
+  }
 }
 
 function onWsMessage(evt) {
@@ -417,10 +430,18 @@ function send(obj) {
 // ─── Button ───────────────────────────────────────────────────────────────────
 btnToggle.addEventListener('click', () => {
   if (isWsOpen()) {
+    state.manualDisconnect = true;   // mark as intentional
     state.ws.close();
   } else {
     btnToggle.disabled = true;
     btnToggle.textContent = 'Connecting…';
     wsConnect();
   }
+});
+
+// ─── Auto-connect on page load ────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+  btnToggle.disabled = true;
+  btnToggle.textContent = 'Connecting…';
+  wsConnect();
 });

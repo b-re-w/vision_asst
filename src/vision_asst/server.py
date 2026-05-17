@@ -78,6 +78,11 @@ LIVE_CONFIG = types.LiveConnectConfig(
     system_instruction=types.Content(parts=[types.Part(text=SYSTEM_PROMPT)]),
     output_audio_transcription=types.AudioTranscriptionConfig(),
     input_audio_transcription=types.AudioTranscriptionConfig(),
+    speech_config=types.SpeechConfig(
+        voice_config=types.VoiceConfig(
+            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Aoede")
+        )
+    ),
 )
 
 # ─── App ───────────────────────────────────────────────────────────────────────
@@ -172,34 +177,42 @@ async def ws_web(ws: WebSocket) -> None:
         ) as session:
 
             async def _gemini_to_web() -> None:
-                async for response in session.receive():
-                    content = response.server_content
-                    if not content:
-                        continue
-                    if content.model_turn:
-                        for part in content.model_turn.parts:
-                            if part.inline_data:
-                                await ws.send_json(
-                                    {"type": "audio", "data": _to_b64(part.inline_data.data)}
-                                )
-                    if content.output_transcription:
-                        await ws.send_json(
-                            {
-                                "type": "transcript",
-                                "role": "output",
-                                "text": content.output_transcription.text,
-                            }
-                        )
-                    if content.input_transcription:
-                        await ws.send_json(
-                            {
-                                "type": "transcript",
-                                "role": "input",
-                                "text": content.input_transcription.text,
-                            }
-                        )
-                    if content.interrupted:
-                        await ws.send_json({"type": "interrupted"})
+                """Forward Gemini responses to browser indefinitely.
+
+                The Gemini receive() generator ends after each turn, so we
+                wrap it in a while-loop to keep the session alive between turns.
+                """
+                while True:
+                    async for response in session.receive():
+                        content = response.server_content
+                        if not content:
+                            continue
+                        if content.model_turn:
+                            for part in content.model_turn.parts:
+                                if part.inline_data:
+                                    await ws.send_json(
+                                        {"type": "audio", "data": _to_b64(part.inline_data.data)}
+                                    )
+                        if content.output_transcription:
+                            await ws.send_json(
+                                {
+                                    "type": "transcript",
+                                    "role": "output",
+                                    "text": content.output_transcription.text,
+                                }
+                            )
+                        if content.input_transcription:
+                            await ws.send_json(
+                                {
+                                    "type": "transcript",
+                                    "role": "input",
+                                    "text": content.input_transcription.text,
+                                }
+                            )
+                        if content.interrupted:
+                            await ws.send_json({"type": "interrupted"})
+                    # Gemini turn finished — yield briefly then wait for next turn
+                    await asyncio.sleep(0.05)
 
             async def _web_to_gemini() -> None:
                 async for msg in ws.iter_json():
@@ -219,8 +232,10 @@ async def ws_web(ws: WebSocket) -> None:
 
             t1 = asyncio.create_task(_gemini_to_web())
             t2 = asyncio.create_task(_web_to_gemini())
-            _, pending = await asyncio.wait({t1, t2}, return_when=asyncio.FIRST_COMPLETED)
-            await _cancel(*pending)
+            # Wait only for t2 (browser→Gemini): it ends when browser disconnects.
+            # t1 loops indefinitely until cancelled.
+            await t2
+            await _cancel(t1)
 
     except WebSocketDisconnect:
         pass
