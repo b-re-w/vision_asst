@@ -102,6 +102,10 @@ const state = {
   modelMsgText:        '',     // accumulated model transcript so far
   manualDisconnect:    false,  // true only when user explicitly disconnects
   stopColorExtraction: null,   // cleanup fn returned by startColorExtraction()
+  isVideoMode:         false,
+  useMic:              false,
+  mediaElementSource:  null,
+  micSource:           null,
 };
 
 const BAR_COUNT = 12;
@@ -156,8 +160,6 @@ async function onWsOpen() {
   btnToggle.classList.add('live');
   btnToggle.disabled = false;
 
-  await setupCamera();
-  await setupMic();
   startCameraCapture();
 
   recDot.classList.add('active');
@@ -178,8 +180,12 @@ function onWsClose() {
     // Unexpected close (server restart, network hiccup) — auto-reconnect
     btnToggle.textContent = 'Reconnecting…';
     btnToggle.disabled = true;
-    setTimeout(() => {
-      if (!isWsOpen()) wsConnect();
+    setTimeout(async () => {
+      if (!isWsOpen()) {
+        await setupCamera();
+        await setupMic();
+        wsConnect();
+      }
     }, 3000);
   }
 }
@@ -217,13 +223,16 @@ async function setupCamera() {
   try {
     const params = new URLSearchParams(window.location.search);
     const videoSrc = params.get('video');
+    const useMic = params.get('mic') === 'true'; // '?video=...&mic=true'
 
     if (videoSrc) {
+      state.isVideoMode = true;
+      state.useMic = useMic;
       // Use provided video instead of camera
       video.src = videoSrc;
       video.loop = false;
-      video.muted = true;
-      video.play();
+      video.muted = false; // Always hear the video
+      video.play().catch(e => console.warn('Video play error:', e));
       
       video.onended = () => {
         if (isWsOpen()) {
@@ -235,6 +244,7 @@ async function setupCamera() {
       // Simulate video stream for the capture loop
       state.videoStream = true; 
     } else {
+      state.isVideoMode = false;
       // Normal camera setup
       state.videoStream = await navigator.mediaDevices.getUserMedia({
         video: { width: 320, height: 240, facingMode: 'environment' },
@@ -270,21 +280,39 @@ function startCameraCapture() {
 
 // ─── Microphone ───────────────────────────────────────────────────────────────
 async function setupMic() {
-  state.audioCtx = new AudioContext();
-
-  try {
-    state.micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-  } catch (err) {
-    console.warn('Microphone unavailable:', err);
-    return;
+  if (!state.audioCtx) {
+    state.audioCtx = new AudioContext();
+  } else if (state.audioCtx.state === 'suspended') {
+    state.audioCtx.resume();
   }
+  const mixer = state.audioCtx.createGain();
 
-  const source = state.audioCtx.createMediaStreamSource(state.micStream);
+  if (state.isVideoMode) {
+    // In video mode, route the video's audio track to both speakers and mixer
+    if (!state.mediaElementSource) {
+      state.mediaElementSource = state.audioCtx.createMediaElementSource(video);
+    }
+    const videoSource = state.mediaElementSource;
+    videoSource.connect(state.audioCtx.destination);
+    videoSource.connect(mixer);
+  }
+  
+  if (!state.isVideoMode || state.useMic) {
+    try {
+      state.micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      state.micSource = state.audioCtx.createMediaStreamSource(state.micStream);
+      state.micSource.connect(mixer);
+    } catch (err) {
+      console.warn('Microphone unavailable:', err);
+      // If we're strictly relying on mic, abort. In video mode, keep going.
+      if (!state.isVideoMode) return;
+    }
+  }
 
   // Analyser for mic-bar visualization
   state.analyser        = state.audioCtx.createAnalyser();
   state.analyser.fftSize = 128;
-  source.connect(state.analyser);
+  mixer.connect(state.analyser);
 
   // ScriptProcessor — extract PCM, resample to 16 kHz, send
   const proc = state.audioCtx.createScriptProcessor(4096, 1, 1);
@@ -298,7 +326,7 @@ async function setupMic() {
     updateUserWaveform(raw);
   };
 
-  source.connect(proc);
+  mixer.connect(proc);
   proc.connect(state.audioCtx.destination);
   state.scriptProcessor = proc;
 
@@ -505,8 +533,16 @@ function teardown() {
   state.scriptProcessor?.disconnect();
   state.scriptProcessor = null;
 
-  state.audioCtx?.close().catch(() => {});
-  state.audioCtx    = null;
+  if (state.mediaElementSource) {
+    state.mediaElementSource.disconnect();
+  }
+  if (state.micSource) {
+    state.micSource.disconnect();
+    state.micSource = null;
+  }
+  
+  // Do NOT close audioCtx because createMediaElementSource can only be called once per video element.
+  // We just reset scheduling.
   state.nextPlayTime = 0;
 
   state.currentUserMsg  = null;
@@ -531,20 +567,34 @@ function send(obj) {
 }
 
 // ─── Button ───────────────────────────────────────────────────────────────────
-btnToggle.addEventListener('click', () => {
+btnToggle.addEventListener('click', async () => {
   if (isWsOpen()) {
     state.manualDisconnect = true;   // mark as intentional
     state.ws.close();
   } else {
     btnToggle.disabled = true;
     btnToggle.textContent = 'Connecting…';
+
+    // Run setup during user interaction to bypass autoplay policies
+    await setupCamera();
+    await setupMic();
+
     wsConnect();
   }
 });
 
 // ─── Auto-connect on page load ────────────────────────────────────────────────
-window.addEventListener('DOMContentLoaded', () => {
+window.addEventListener('DOMContentLoaded', async () => {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('video')) {
+    // Skip auto-connect in video mode to ensure we get a user click 
+    // to bypass browser autoplay policies for unmuted audio.
+    return;
+  }
   btnToggle.disabled = true;
   btnToggle.textContent = 'Connecting…';
+  
+  await setupCamera();
+  await setupMic();
   wsConnect();
 });
