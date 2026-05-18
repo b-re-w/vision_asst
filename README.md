@@ -33,6 +33,10 @@ uv sync
 ```bash
 uv run ./src/vision_asst/server.py  # open server on 12345 port
 ```
+```md
+open http://127.0.0.1:12345/?video=res/after2.mp4
+open http://127.0.0.1:12345/?video=res/after.mp4&mic=true
+```
 
 ### Archtecture
 
