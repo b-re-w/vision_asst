@@ -1,6 +1,7 @@
 package io.github.brew.visionassist
 
 import android.os.Build
+import androidx.compose.runtime.Composable
 
 
 class AndroidPlatform : Platform {
@@ -8,3 +9,6 @@ class AndroidPlatform : Platform {
 }
 
 actual fun getPlatform(): Platform = AndroidPlatform()
+
+@Composable
+actual fun rememberWebViewReady(): Boolean = true

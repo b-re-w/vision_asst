@@ -32,6 +32,9 @@ kotlin {
             implementation(libs.kotlinx.coroutinesSwing)
 
             implementation(libs.compose.uiToolingPreview)
+
+            // KCEF: desktop WebView backend (downloads a Chromium bundle on first run).
+            implementation(libs.kcef)
         }
         commonMain.dependencies {
             implementation(libs.compose.runtime)
@@ -42,6 +45,9 @@ kotlin {
             implementation(libs.compose.uiToolingPreview)
             implementation(libs.androidx.lifecycle.viewmodelCompose)
             implementation(libs.androidx.lifecycle.runtimeCompose)
+
+            // Cross-platform WebView (Android + Desktop).
+            implementation(libs.compose.webview.multiplatform)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
@@ -81,6 +87,12 @@ android {
 compose.desktop {
     application {
         mainClass = "io.github.brew.visionassist.MainKt"
+
+        // KCEF / JCEF needs these module openings to launch the Chromium process.
+        jvmArgs += listOf(
+            "--add-opens", "java.desktop/sun.awt=ALL-UNNAMED",
+            "--add-opens", "java.desktop/java.awt.peer=ALL-UNNAMED",
+        )
 
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)

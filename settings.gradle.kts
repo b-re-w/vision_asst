@@ -25,6 +25,8 @@ dependencyResolutionManagement {
             }
         }
         mavenCentral()
+        // KCEF (desktop WebView backend) pulls JCEF natives from the JogAmp repo.
+        maven("https://jogamp.org/deployment/maven")
     }
 }
 
