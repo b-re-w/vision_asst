@@ -285,4 +285,12 @@ async def ws_web(ws: WebSocket) -> None:
 
 # ─── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    uvicorn.run("server:app", host="0.0.0.0", port=12345, reload=False, log_level="info")
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Vision Assistant — Gemini Live API Relay Server")
+    parser.add_argument("--host", default="0.0.0.0", help="Host to bind (default: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=12345, help="Port to bind (default: 12345)")
+    parser.add_argument("--reload", action="store_true", help="Enable auto-reload on file changes")
+    args = parser.parse_args()
+
+    uvicorn.run("server:app", host=args.host, port=args.port, reload=args.reload, log_level="info")
