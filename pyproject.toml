@@ -5,10 +5,10 @@ description = "Vision Assistant for Visually-impaired People"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "torch>=2.11.0",
-    "transformers>=5.8.0",
-    "vllm>=0.20.1; sys_platform == 'linux'",
-    "vllm-omni[demo]>=0.20.0; sys_platform == 'linux'",
+    #"torch>=2.11.0",
+    #"transformers>=5.8.0",
+    #"vllm>=0.20.1; sys_platform == 'linux'",
+    #"vllm-omni[demo]>=0.20.0; sys_platform == 'linux'",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     "pydantic>=2.9.0",
