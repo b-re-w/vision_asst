@@ -126,10 +126,23 @@ compose.desktop {
             "--add-opens", "java.desktop/java.awt.peer=ALL-UNNAMED",
         )
 
+        // macOS: CEF's message loop must run on the AppKit main thread (thread 0).
+        // Without this, JCEF initializes CefApp on a background thread and crashes
+        // with SIGSEGV in libjcef. (No-op / unneeded on Windows and Linux.)
+        if (System.getProperty("os.name").startsWith("Mac")) {
+            jvmArgs += "-XstartOnFirstThread"
+        }
+
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "io.github.brew.visionassist"
             packageVersion = "1.0.0"
+        }
+
+        application {
+            buildTypes.release.proguard {
+                isEnabled = false
+            }
         }
     }
 }
