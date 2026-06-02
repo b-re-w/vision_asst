@@ -2,6 +2,7 @@ package io.github.brew.visionassist
 
 import android.Manifest
 import android.os.Bundle
+import android.webkit.WebView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -20,6 +21,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+
+        // Allow inspecting the WebView from desktop Chrome via chrome://inspect, so we
+        // can read the page's console (e.g. whether getUserMedia / mediaDevices works).
+        WebView.setWebContentsDebuggingEnabled(true)
 
         permissionLauncher.launch(
             arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO),

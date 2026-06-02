@@ -35,6 +35,10 @@ kotlin {
 
             // KCEF: desktop WebView backend (downloads a Chromium bundle on first run).
             implementation(libs.kcef)
+
+            // JNA: call Windows DWM APIs for rounded window corners.
+            implementation(libs.jna)
+            implementation(libs.jna.platform)
         }
         commonMain.dependencies {
             implementation(libs.compose.runtime)
