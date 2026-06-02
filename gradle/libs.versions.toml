@@ -17,6 +17,7 @@ material3 = "1.11.0-alpha07"
 composeWebview = "2.0.3"
 kcef = "2024.04.20.4"
 jna = "5.14.0"
+ktor = "3.5.0"
 
 [libraries]
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
@@ -41,6 +42,8 @@ compose-webview-multiplatform = { module = "io.github.kevinnzou:compose-webview-
 kcef = { module = "dev.datlag:kcef", version.ref = "kcef" }
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 jna-platform = { module = "net.java.dev.jna:jna-platform", version.ref = "jna" }
+ktor-server-core = { module = "io.ktor:ktor-server-core", version.ref = "ktor" }
+ktor-server-cio = { module = "io.ktor:ktor-server-cio", version.ref = "ktor" }
 
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }

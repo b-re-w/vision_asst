@@ -36,3 +36,6 @@ wheels/
 # Agents
 .claude/
 .omc/
+
+# Bundled web client (generated from res/ by the syncWebAssets Gradle task)
+src/commonMain/composeResources/files/web/

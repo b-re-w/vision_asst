@@ -52,6 +52,11 @@ kotlin {
 
             // Cross-platform WebView (Android + Desktop).
             implementation(libs.compose.webview.multiplatform)
+
+            // Embedded HTTP server to serve the bundled web client from localhost
+            // (a secure context, so getUserMedia works without origin hacks).
+            implementation(libs.ktor.server.core)
+            implementation(libs.ktor.server.cio)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
@@ -86,6 +91,29 @@ android {
         targetCompatibility = JavaVersion.VERSION_11
     }
 }
+
+
+// ─── Bundle the web client into the app ──────────────────────────────────────────
+// `res/` is the single source of truth (also served by the Python server). Mirror it
+// into Compose resources (files/web) so the in-app Ktor server can serve it via
+// Res.readBytes on both Android and desktop. Large demo videos are excluded.
+val syncWebAssets by tasks.registering(Sync::class) {
+    from(layout.projectDirectory.dir("res")) {
+        exclude("**/*.mp4")
+    }
+    into(layout.projectDirectory.dir("src/commonMain/composeResources/files/web"))
+}
+
+// Ensure the mirror exists before Compose collects/packages/indexes resources
+// (covers prepareComposeResources*, copyNonXmlValueResources*, convertXmlValueResources*,
+// generateResourceAccessors* across all source sets).
+tasks.matching { t ->
+    t.name != "syncWebAssets" && (
+        t.name.contains("ComposeResources", ignoreCase = true) ||
+            t.name.contains("ValueResources", ignoreCase = true) ||
+            t.name.contains("ResourceAccessors", ignoreCase = true)
+    )
+}.configureEach { dependsOn(syncWebAssets) }
 
 
 compose.desktop {

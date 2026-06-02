@@ -17,15 +17,19 @@ import com.multiplatform.webview.web.rememberWebViewState
 @Preview
 fun App() {
     MaterialTheme {
-        // On desktop the WebView backend (KCEF/Chromium) must finish initializing
-        // before the WebView can render; on Android this is always ready.
-        if (rememberWebViewReady()) {
-            val state = rememberWebViewState(TARGET_URL)
+        // The page is served from a loopback server (http://127.0.0.1) so it runs in a
+        // secure context and getUserMedia works. On desktop we also wait for the WebView
+        // backend (KCEF) to finish initializing.
+        val backendReady = rememberWebViewReady()
+        val serverUrl = rememberLocalServerUrl()
+        if (backendReady && serverUrl != null) {
+            val state = rememberWebViewState(serverUrl)
             WebView(
                 state = state,
                 modifier = Modifier
                     .safeContentPadding()
                     .fillMaxSize(),
+                onCreated = { nativeWebView -> installWebViewConsoleLogger(nativeWebView) },
             )
         } else {
             Box(

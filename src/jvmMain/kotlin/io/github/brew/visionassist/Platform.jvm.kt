@@ -38,22 +38,15 @@ actual fun rememberWebViewReady(): Boolean {
                     progress {
                         onInitialized { ready = true }
                     }
-                    // The page is served over plain http, but getUserMedia (camera/mic)
-                    // only works in a "secure context". The secure-context decision is
-                    // made in the *renderer* subprocess, so the switch must be injected
-                    // via onBeforeCommandLineProcessing (called for every process) — a
-                    // browser-process-only arg does not reach the renderer.
+                    // The page loads from http://127.0.0.1 (a secure context), so no
+                    // origin hack is needed. We still auto-accept the media prompt
+                    // because JCEF has no UI to click "Allow".
                     appHandler(object : KCEF.AppHandler() {
                         override fun onBeforeCommandLineProcessing(
                             processType: String?,
                             commandLine: CefCommandLine?,
                         ) {
                             super.onBeforeCommandLineProcessing(processType, commandLine)
-                            commandLine?.appendSwitchWithValue(
-                                "unsafely-treat-insecure-origin-as-secure",
-                                TARGET_ORIGIN,
-                            )
-                            // Auto-accept the media prompt (JCEF has no "Allow" UI).
                             commandLine?.appendSwitch("use-fake-ui-for-media-stream")
                         }
                     })

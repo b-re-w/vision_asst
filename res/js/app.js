@@ -615,9 +615,10 @@ function send(obj) {
 }
 
 // ─── Ephemeral token ────────────────────────────────────────────────────────────
-// Primary issuer; if unreachable we fall back to our own origin ('/token'), e.g. an
-// in-app local token server.
+// Primary issuer; if unreachable we fall back to a Python test server running on the
+// local machine (so dev sessions don't need to reach cuws).
 const TOKEN_SERVER = 'http://cuws.duckdns.org:8000';
+const FALLBACK_TOKEN_SERVER = 'http://localhost:8000';
 
 function showToast(message, type = 'info') {
   const host = document.getElementById('toast-host');
@@ -650,19 +651,22 @@ async function fetchToken(url, timeoutMs) {
 // Try the main server first; if it doesn't respond, fall back to our own origin.
 // Returns the ephemeral token, or null if both fail.
 async function acquireToken() {
+  console.info(`[token] requesting from main server ${TOKEN_SERVER}/token`);
   try {
     const token = await fetchToken(`${TOKEN_SERVER}/token`, 4000);
+    console.info('[token] acquired from main server');
     showToast('토큰 발급 성공', 'success');
     return token;
   } catch (err) {
-    console.warn('Main token server unreachable:', err);
+    console.warn(`[token] main server unreachable (${err.message}); trying fallback ${FALLBACK_TOKEN_SERVER}/token`);
     showToast('메인 서버 접근 실패 · 폴백 시도', 'warn');
     try {
-      const token = await fetchToken('/token', 6000);
+      const token = await fetchToken(`${FALLBACK_TOKEN_SERVER}/token`, 4000);
+      console.info('[token] acquired from fallback server');
       showToast('토큰 발급 성공 (폴백)', 'success');
       return token;
     } catch (err2) {
-      console.error('Fallback token issuance failed:', err2);
+      console.error(`[token] both issuers failed: ${err2.message}`);
       showToast('토큰 발급 실패', 'error');
       return null;
     }
