@@ -3,31 +3,31 @@
 Bridges hardware (ESP32) and web browser clients to the Gemini Live API.
 
 Endpoints:
-  GET  /           → res/index.html  (web test client)
-  GET  /res/*      → static files    (res/ directory)
-  WS   /ws/device  → ESP32 binary protocol
-  WS   /ws/web     → Browser JSON protocol
+    GET  /           → res/index.html  (web test client)
+    GET  /res/*      → static files    (res/ directory)
+    WS   /ws/device  → ESP32 binary protocol
+    WS   /ws/web     → Browser JSON protocol
 
 Binary protocol  (device ↔ server):
-  ESP32  → Server : [0x01][PCM 16 kHz 16-bit mono raw bytes]
-  ESP32  → Server : [0x02][JPEG bytes]
-  Server → ESP32  : [0x01][PCM 24 kHz 16-bit mono raw bytes]
+    ESP32  → Server : [0x01][PCM 16 kHz 16-bit mono raw bytes]
+    ESP32  → Server : [0x02][JPEG bytes]
+    Server → ESP32  : [0x01][PCM 24 kHz 16-bit mono raw bytes]
 
 JSON protocol  (browser ↔ server):
-  Browser → Server : {"type":"audio","data":"<base64 pcm 16 kHz>"}
-  Browser → Server : {"type":"video","data":"<base64 jpeg>"}
-  Server → Browser : {"type":"audio","data":"<base64 pcm 24 kHz>"}
-  Server → Browser : {"type":"transcript","role":"input"|"output","text":"..."}
-  Server → Browser : {"type":"interrupted"}
+    Browser → Server : {"type":"audio","data":"<base64 pcm 16 kHz>"}
+    Browser → Server : {"type":"video","data":"<base64 jpeg>"}
+    Server → Browser : {"type":"audio","data":"<base64 pcm 24 kHz>"}
+    Server → Browser : {"type":"transcript","role":"input"|"output","text":"..."}
+    Server → Browser : {"type":"interrupted"}
 
 Config:
-  API key  : .env  →  gemini.key  (falls back to default.env)
-  System prompt : ASSISTANT.md  (auto-reloaded at startup)
+    API key  : .env  →  gemini.key  (falls back to default.env)
+    System prompt : ASSISTANT.md  (auto-reloaded at startup)
 
 Run:
-  uv run python server.py
-  # or
-  uvicorn server:app --host 0.0.0.0 --port 8000 --reload
+    uv run python server.py
+    # or
+    uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 """
 
 import asyncio
@@ -37,6 +37,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from google import genai
@@ -73,6 +74,13 @@ MSG_VIDEO: int = 0x02
 
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
+# Ephemeral auth tokens are only served on the v1alpha API surface, so use a
+# dedicated client pinned to that version for minting them.
+token_client = genai.Client(
+    api_key=GEMINI_API_KEY,
+    http_options=types.HttpOptions(api_version="v1alpha"),
+)
+
 LIVE_CONFIG = types.LiveConnectConfig(
     response_modalities=[types.Modality.AUDIO],
     system_instruction=types.Content(parts=[types.Part(text=SYSTEM_PROMPT)]),
@@ -90,12 +98,42 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-8s  %(
 log = logging.getLogger(__name__)
 
 app = FastAPI(title="Vision Assistant — Gemini Relay")
+
+# The web/Android client may be served from a different origin (e.g. an in-app
+# http://localhost server), so allow cross-origin token requests.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.mount("/res", StaticFiles(directory=BASE_DIR / "res"), name="res")
 
 
 @app.get("/")
 async def index() -> FileResponse:
     return FileResponse(BASE_DIR / "res" / "index.html")
+
+
+@app.get("/token")
+async def create_token() -> dict[str, str]:
+    """Mint a short-lived Gemini ephemeral token for direct client→Live API use.
+
+    The token is locked to our model + LiveConnectConfig (system prompt, audio,
+    voice) so the client cannot change them, and is single-use for one new
+    session. The Gemini API key never leaves the server.
+    """
+    token = await token_client.aio.auth_tokens.create(
+        config=types.CreateAuthTokenConfig(
+            uses=1,
+            live_connect_constraints=types.LiveConnectConstraints(
+                model=GEMINI_MODEL,
+                config=LIVE_CONFIG,
+            ),
+        )
+    )
+    return {"token": token.name or ""}
 
 
 # ─── Internal helpers ──────────────────────────────────────────────────────────

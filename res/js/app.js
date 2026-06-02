@@ -89,6 +89,9 @@ function stopColorExtraction() {
 // ─── State ───────────────────────────────────────────────────────────────────
 const state = {
   ws:               null,
+  session:          null,   // Gemini Live session
+  connected:        false,  // true while the Live session is open
+  token:            null,   // ephemeral auth token
   audioCtx:         null,
   micStream:        null,
   videoStream:      null,
@@ -143,18 +146,48 @@ function base64ToInt16(b64) {
   return new Int16Array(buf);
 }
 
-// ─── WebSocket ───────────────────────────────────────────────────────────────
-function wsConnect() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  state.ws    = new WebSocket(`${proto}://${location.host}/ws/web`);
+// ─── Gemini Live (direct) ───────────────────────────────────────────────────────
+// We connect straight to the Gemini Live API using the ephemeral token, replacing
+// the old relay WebSocket. The token locks the model + config (system prompt, audio,
+// voice) server-side, so the client cannot change them.
+const GEMINI_MODEL = 'gemini-3.1-flash-live-preview';
+const GENAI_SDK_URL = 'https://cdn.jsdelivr.net/npm/@google/genai@1/+esm';
 
-  state.ws.addEventListener('open',    onWsOpen);
-  state.ws.addEventListener('message', onWsMessage);
-  state.ws.addEventListener('close',   onWsClose);
-  state.ws.addEventListener('error',   (e) => console.error('WS error', e));
+async function geminiConnect() {
+  if (!state.token) {
+    showToast('토큰이 없어 연결할 수 없습니다', 'error');
+    onDisconnected();
+    return;
+  }
+  try {
+    const { GoogleGenAI, Modality } = await import(GENAI_SDK_URL);
+    const ai = new GoogleGenAI({
+      apiKey: state.token,
+      httpOptions: { apiVersion: 'v1alpha' },
+    });
+    state.session = await ai.live.connect({
+      model: GEMINI_MODEL,
+      config: {
+        responseModalities: [Modality.AUDIO],
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
+      },
+      callbacks: {
+        onopen: onConnected,
+        onmessage: onServerMessage,
+        onerror: (e) => console.error('Gemini Live error:', e),
+        onclose: (e) => { console.warn('Gemini Live closed:', e?.reason || ''); onDisconnected(); },
+      },
+    });
+  } catch (err) {
+    console.error('Gemini connect failed:', err);
+    showToast('Gemini 연결 실패', 'error');
+    onDisconnected();
+  }
 }
 
-async function onWsOpen() {
+function onConnected() {
+  state.connected = true;
   statusDot.classList.add('connected');
   btnToggle.textContent = 'Disconnect';
   btnToggle.classList.add('live');
@@ -166,7 +199,9 @@ async function onWsOpen() {
   micRing.classList.add('active');
 }
 
-function onWsClose() {
+function onDisconnected() {
+  state.connected = false;
+  state.session = null;
   statusDot.classList.remove('connected');
   btnToggle.classList.remove('live');
   btnToggle.disabled = false;
@@ -177,45 +212,52 @@ function onWsClose() {
     state.manualDisconnect = false;
     btnToggle.textContent = 'Connect';
   } else {
-    // Unexpected close (server restart, network hiccup) — auto-reconnect
+    // Unexpected close (network hiccup, session expiry) — auto-reconnect
     btnToggle.textContent = 'Reconnecting…';
     btnToggle.disabled = true;
     setTimeout(async () => {
       if (!isWsOpen()) {
+        // The ephemeral token is single-use, so mint a fresh one per session.
+        state.token = await acquireToken();
         await setupCamera();
         await setupMic();
-        wsConnect();
+        geminiConnect();
       }
     }, 3000);
   }
 }
 
-function onWsMessage(evt) {
-  let msg;
-  try { msg = JSON.parse(evt.data); } catch { return; }
+function onServerMessage(message) {
+  const content = message.serverContent;
+  if (!content) return;
 
-  switch (msg.type) {
-    case 'audio':
-      ensureModelMsg();
-      playAudio(msg.data);
-      setWaveformLive(state.currentModelMsg, true);
-      break;
-
-    case 'transcript':
-      if (msg.role === 'input') {
-        ensureUserMsg();
-        setTranscript(state.currentUserMsg, msg.text, false);
-        sealUserMsg();
-      } else if (msg.role === 'output') {
+  if (content.modelTurn?.parts) {
+    for (const part of content.modelTurn.parts) {
+      if (part.inlineData?.data) {
         ensureModelMsg();
-        setTranscript(state.currentModelMsg, msg.text, true);
+        playAudio(part.inlineData.data);
+        setWaveformLive(state.currentModelMsg, true);
       }
-      break;
-
-    case 'interrupted':
-      sealModelMsg();
-      break;
+    }
   }
+  if (content.outputTranscription?.text) {
+    ensureModelMsg();
+    setTranscript(state.currentModelMsg, content.outputTranscription.text, true);
+  }
+  if (content.inputTranscription?.text) {
+    ensureUserMsg();
+    setTranscript(state.currentUserMsg, content.inputTranscription.text, false);
+    sealUserMsg();
+  }
+  if (content.interrupted) {
+    sealModelMsg();
+  }
+}
+
+// Close the Live session. onclose → onDisconnected handles UI/reconnect.
+function disconnect() {
+  try { state.session?.close(); } catch (_) { /* already closing */ }
+  state.connected = false;
 }
 
 // ─── Camera ──────────────────────────────────────────────────────────────────
@@ -237,7 +279,7 @@ async function setupCamera() {
       video.onended = () => {
         if (isWsOpen()) {
           state.manualDisconnect = true;
-          state.ws.close(1000, "Video ended");
+          disconnect();
         }
       };
       
@@ -559,27 +601,90 @@ function teardown() {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function isWsOpen() {
-  return state.ws?.readyState === WebSocket.OPEN;
+  return state.connected;
 }
 
 function send(obj) {
-  if (isWsOpen()) state.ws.send(JSON.stringify(obj));
+  const s = state.session;
+  if (!s || !state.connected) return;
+  if (obj.type === 'audio') {
+    s.sendRealtimeInput({ audio: { data: obj.data, mimeType: 'audio/pcm;rate=16000' } });
+  } else if (obj.type === 'video') {
+    s.sendRealtimeInput({ video: { data: obj.data, mimeType: 'image/jpeg' } });
+  }
+}
+
+// ─── Ephemeral token ────────────────────────────────────────────────────────────
+// Primary issuer; if unreachable we fall back to our own origin ('/token'), e.g. an
+// in-app local token server.
+const TOKEN_SERVER = 'http://cuws.duckdns.org:8000';
+
+function showToast(message, type = 'info') {
+  const host = document.getElementById('toast-host');
+  if (!host) return;
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  el.textContent = message;
+  host.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  setTimeout(() => {
+    el.classList.remove('show');
+    el.addEventListener('transitionend', () => el.remove(), { once: true });
+  }, 3200);
+}
+
+async function fetchToken(url, timeoutMs) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const { token } = await res.json();
+    if (!token) throw new Error('empty token');
+    return token;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Try the main server first; if it doesn't respond, fall back to our own origin.
+// Returns the ephemeral token, or null if both fail.
+async function acquireToken() {
+  try {
+    const token = await fetchToken(`${TOKEN_SERVER}/token`, 4000);
+    showToast('토큰 발급 성공', 'success');
+    return token;
+  } catch (err) {
+    console.warn('Main token server unreachable:', err);
+    showToast('메인 서버 접근 실패 · 폴백 시도', 'warn');
+    try {
+      const token = await fetchToken('/token', 6000);
+      showToast('토큰 발급 성공 (폴백)', 'success');
+      return token;
+    } catch (err2) {
+      console.error('Fallback token issuance failed:', err2);
+      showToast('토큰 발급 실패', 'error');
+      return null;
+    }
+  }
 }
 
 // ─── Button ───────────────────────────────────────────────────────────────────
 btnToggle.addEventListener('click', async () => {
   if (isWsOpen()) {
     state.manualDisconnect = true;   // mark as intentional
-    state.ws.close();
+    disconnect();
   } else {
     btnToggle.disabled = true;
     btnToggle.textContent = 'Connecting…';
+
+    state.token = await acquireToken();
 
     // Run setup during user interaction to bypass autoplay policies
     await setupCamera();
     await setupMic();
 
-    wsConnect();
+    geminiConnect();
   }
 });
 
@@ -593,8 +698,10 @@ window.addEventListener('DOMContentLoaded', async () => {
   }
   btnToggle.disabled = true;
   btnToggle.textContent = 'Connecting…';
-  
+
+  state.token = await acquireToken();
+
   await setupCamera();
   await setupMic();
-  wsConnect();
+  geminiConnect();
 });
