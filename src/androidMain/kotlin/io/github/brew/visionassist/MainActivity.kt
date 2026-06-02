@@ -1,9 +1,11 @@
 package io.github.brew.visionassist
 
 import android.Manifest
+import android.graphics.Color
 import android.os.Bundle
 import android.webkit.WebView
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -19,7 +21,12 @@ class MainActivity : ComponentActivity() {
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge()
+        // Dark system bars → light (white) icons, so the clock is visible against the
+        // app's dark background.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+        )
         super.onCreate(savedInstanceState)
 
         // Allow inspecting the WebView from desktop Chrome via chrome://inspect, so we
