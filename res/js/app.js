@@ -11,20 +11,6 @@
 
 'use strict';
 
-// Force a media (playback) audio session. Without this, getUserMedia (mic) puts the
-// WebView into a communication session, routing output to the call stream and hijacking
-// the call-volume control. 'playback' keeps it on the media stream/volume.
-try {
-  if (navigator.audioSession) {
-    navigator.audioSession.type = 'playback';
-    console.log('[AUDIO] audioSession supported, type =', navigator.audioSession.type);
-  } else {
-    console.log('[AUDIO] audioSession NOT supported on this WebView');
-  }
-} catch (e) {
-  console.log('[AUDIO] audioSession error:', e);
-}
-
 // ─── DOM refs ────────────────────────────────────────────────────────────────
 const video          = document.getElementById('video');
 const camPlaceholder = document.getElementById('cam-placeholder');
@@ -35,9 +21,11 @@ const btnToggle      = document.getElementById('btn-toggle');
 const micRing        = document.getElementById('mic-ring');
 const micBarEls      = document.querySelectorAll('#mic-bars span');
 
-// Touch devices (phone WebView) get the lightweight rendering path: the ambient
-// color-extraction loop re-blurs the giant orbs and is too costly on mobile GPUs.
-const IS_TOUCH = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+// Touch devices (phone WebView) get the lightweight rendering path. We detect via
+// maxTouchPoints — NOT a (pointer: coarse) media query, which is false on phones whose
+// primary input is fine (e.g. Samsung S-Pen), silently disabling every mobile rule.
+const IS_TOUCH = (navigator.maxTouchPoints || 0) > 0 || 'ontouchstart' in window;
+document.documentElement.classList.toggle('mobile', IS_TOUCH);
 
 // ─── Camera color extraction ──────────────────────────────────────────────────
 // Tiny canvas — samples average color from camera feed → drives CSS ambient light

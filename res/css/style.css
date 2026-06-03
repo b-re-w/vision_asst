@@ -545,30 +545,16 @@
     .toast-error   { border-left: 3px solid #e5564b; }
 
     /* ─── Mobile performance ─────────────────────────────────────────────────────
-       On touch devices (phone WebView), the giant blurred ambient orbs + the
-       container's backdrop-filter are too GPU-heavy and cause severe frame drops.
-       Trim them on touch only; desktop keeps the full effect. */
-    @media (hover: none) and (pointer: coarse) {
-      /* Two 72vmax blur layers are too heavy for phone GPUs even when static. */
-      .orb-1, .orb-2 { display: none; }
-      .scene-noise { display: none; }
-      .container {
-        backdrop-filter: none; /* the single biggest mobile cost */
-        -webkit-backdrop-filter: none;
-        background: #0a0e16;   /* opaque — avoid translucent-blend artifacts */
-      }
-      .logo { filter: none; }
-      /* mask-image forces a composited layer that corrupts into stale rectangles on
-         some mobile WebView GPU drivers — drop the chat fade mask on touch. */
-      .chat-section {
-        mask-image: none;
-        -webkit-mask-image: none;
-      }
-      /* Flatten every GPU-compositing trigger (blurred box-shadow glows, persistent
-         will-change layers) — these corrupt into stale rectangles on some mobile
-         WebView GPU drivers. */
-      *, *::before, *::after {
-        box-shadow: none !important;
-        will-change: auto !important;
-      }
+       Phone WebViews can't handle the two 72vmax blurred orbs (whose default colour is
+       blue — they were also the stray blue rectangle when the gate failed to apply) or
+       the container's backdrop-filter, so drop just those. Shadows, the char-reveal
+       animation, etc. are kept for the full look. Gated by the .mobile class (added by
+       JS via navigator.maxTouchPoints) rather than a (pointer: coarse) media query, which
+       is false on phones whose primary input is fine (e.g. Samsung S-Pen). */
+    html.mobile .orb-1, html.mobile .orb-2 { display: none; }
+    html.mobile .scene-noise { display: none; }
+    html.mobile .container {
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      background: #0a0e16; /* opaque, since there's no blur backdrop now */
     }
