@@ -92,9 +92,17 @@ fun main() = application {
         // WebView canvas).
         LaunchedEffect(Unit) { applyNativeWindowChrome(window) }
 
-        Column(Modifier.fillMaxSize()) {
+        // The title bar (top, full width) and a thin margin around the WebView expose
+        // the parent window surface at every edge, so native edge/corner resize
+        // (WM_NCHITTEST) can grab there instead of the heavyweight WebView swallowing it.
+        Column(Modifier.fillMaxSize().background(WindowEdgeColor)) {
             AppTitleBar(windowState)
-            Box(Modifier.weight(1f).fillMaxWidth()) {
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(start = ResizeMargin, end = ResizeMargin, bottom = ResizeMargin),
+            ) {
                 App()
             }
         }
@@ -104,6 +112,9 @@ fun main() = application {
 
 private val TitleBarColor = Color(0xFF15151A)
 private val TitleTextColor = Color(0xFFE8E8EC)
+private val WindowEdgeColor = Color(0xFF06090F) // matches the page background
+private val ResizeMargin = 1.1.dp                  // exposes the parent window resize border
+                                                 // (visible border width == grab width)
 
 /** Custom in-app title bar (the window is undecorated). Drag to move; buttons on the right. */
 @Composable
@@ -214,7 +225,20 @@ private const val WM_NCCALCSIZE = 0x0083
 private const val WM_WINDOWPOSCHANGED = 0x0047
 private const val WM_DPICHANGED = 0x02E0
 private const val WM_GETMINMAXINFO = 0x0024
+private const val WM_NCHITTEST = 0x0084
 private const val MONITOR_DEFAULTTONEAREST = 2
+
+// Edge resize zone width (px). The Compose layout exposes a matching margin around the
+// heavyweight WebView so these zones land on the parent window, not the CEF child.
+private const val RESIZE_BORDER_PX = 6
+private const val HTLEFT = 10
+private const val HTRIGHT = 11
+private const val HTTOP = 12
+private const val HTTOPLEFT = 13
+private const val HTTOPRIGHT = 14
+private const val HTBOTTOM = 15
+private const val HTBOTTOMLEFT = 16
+private const val HTBOTTOMRIGHT = 17
 private const val SWP_NOSIZE = 0x0001
 private const val SWP_NOMOVE = 0x0002
 private const val SWP_NOZORDER = 0x0004
@@ -301,6 +325,12 @@ private fun applyWindowsChrome(window: java.awt.Window) {
                     // which sizes the maximized window to the monitor work area.
                     return WinDef.LRESULT(0L)
                 }
+                if (uMsg == WM_NCHITTEST) {
+                    // Native edge/corner resize. Only fires over the exposed margin
+                    // (the CEF child eats hits over the WebView itself).
+                    val ht = resizeHitTest(hWnd, lParam)
+                    if (ht != 0) return WinDef.LRESULT(ht.toLong())
+                }
                 val result = User32.INSTANCE.CallWindowProc(oldProc, hWnd, uMsg, wParam, lParam)
                 when (uMsg) {
                     WM_WINDOWPOSCHANGED -> extendFrame()
@@ -345,6 +375,34 @@ private fun constrainMaximizeToWorkArea(hWnd: WinDef.HWND, lParam: WinDef.LPARAM
         p.setInt(12, work.bottom - work.top)  // ptMaxSize.y
         p.setInt(16, work.left - mon.left)    // ptMaxPosition.x
         p.setInt(20, work.top - mon.top)      // ptMaxPosition.y
+    }
+}
+
+/**
+ * Map a WM_NCHITTEST screen point to an edge/corner resize code, or 0 (HTNOWHERE) when
+ * it's not on the resize border so the default proc returns HTCLIENT.
+ */
+private fun resizeHitTest(hWnd: WinDef.HWND, lParam: WinDef.LPARAM): Int {
+    val rect = WinDef.RECT()
+    if (!User32.INSTANCE.GetWindowRect(hWnd, rect)) return 0
+    val lp = lParam.toInt()
+    val x = lp.toShort().toInt()           // screen X (signed LOWORD)
+    val y = (lp shr 16).toShort().toInt()  // screen Y (signed HIWORD)
+    val b = RESIZE_BORDER_PX
+    val left = x < rect.left + b
+    val right = x >= rect.right - b
+    val top = y < rect.top + b
+    val bottom = y >= rect.bottom - b
+    return when {
+        top && left -> HTTOPLEFT
+        top && right -> HTTOPRIGHT
+        bottom && left -> HTBOTTOMLEFT
+        bottom && right -> HTBOTTOMRIGHT
+        left -> HTLEFT
+        right -> HTRIGHT
+        top -> HTTOP
+        bottom -> HTBOTTOM
+        else -> 0
     }
 }
 

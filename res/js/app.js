@@ -11,6 +11,20 @@
 
 'use strict';
 
+// Force a media (playback) audio session. Without this, getUserMedia (mic) puts the
+// WebView into a communication session, routing output to the call stream and hijacking
+// the call-volume control. 'playback' keeps it on the media stream/volume.
+try {
+  if (navigator.audioSession) {
+    navigator.audioSession.type = 'playback';
+    console.log('[AUDIO] audioSession supported, type =', navigator.audioSession.type);
+  } else {
+    console.log('[AUDIO] audioSession NOT supported on this WebView');
+  }
+} catch (e) {
+  console.log('[AUDIO] audioSession error:', e);
+}
+
 // ─── DOM refs ────────────────────────────────────────────────────────────────
 const video          = document.getElementById('video');
 const camPlaceholder = document.getElementById('cam-placeholder');
@@ -20,6 +34,10 @@ const messages       = document.getElementById('messages');
 const btnToggle      = document.getElementById('btn-toggle');
 const micRing        = document.getElementById('mic-ring');
 const micBarEls      = document.querySelectorAll('#mic-bars span');
+
+// Touch devices (phone WebView) get the lightweight rendering path: the ambient
+// color-extraction loop re-blurs the giant orbs and is too costly on mobile GPUs.
+const IS_TOUCH = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
 
 // ─── Camera color extraction ──────────────────────────────────────────────────
 // Tiny canvas — samples average color from camera feed → drives CSS ambient light
@@ -95,7 +113,8 @@ const state = {
   audioCtx:         null,
   micStream:        null,
   videoStream:      null,
-  scriptProcessor:  null,
+  workletNode:      null,   // AudioWorkletNode capturing mic PCM
+  workletReady:     false,  // true once the worklet module is added to the context
   analyser:         null,
   micAnimId:        null,
   camInterval:      null,
@@ -114,23 +133,6 @@ const state = {
 const BAR_COUNT = 12;
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
-function float32ToInt16(f32) {
-  const out = new Int16Array(f32.length);
-  for (let i = 0; i < f32.length; i++) {
-    out[i] = Math.max(-32768, Math.min(32767, f32[i] * 32768));
-  }
-  return out;
-}
-
-function downsample(buf, fromRate, toRate) {
-  if (fromRate === toRate) return buf;
-  const ratio  = fromRate / toRate;
-  const len    = Math.floor(buf.length / ratio);
-  const out    = new Float32Array(len);
-  for (let i = 0; i < len; i++) out[i] = buf[Math.floor(i * ratio)];
-  return out;
-}
-
 function bufToBase64(ab) {
   const bytes = new Uint8Array(ab);
   let s = '';
@@ -295,8 +297,11 @@ async function setupCamera() {
     }
     
     camPlaceholder.style.display = 'none';
-    // Begin sampling camera pixels → update CSS ambient color vars
-    state.stopColorExtraction = startColorExtraction();
+    // Begin sampling camera pixels → update CSS ambient color vars.
+    // Skipped on touch devices — re-blurring the orbs every frame is too costly there.
+    if (!IS_TOUCH) {
+      state.stopColorExtraction = startColorExtraction();
+    }
   } catch (err) {
     console.warn('Camera unavailable:', err);
   }
@@ -356,21 +361,26 @@ async function setupMic() {
   state.analyser.fftSize = 128;
   mixer.connect(state.analyser);
 
-  // ScriptProcessor — extract PCM, resample to 16 kHz, send
-  const proc = state.audioCtx.createScriptProcessor(4096, 1, 1);
-  proc.onaudioprocess = (e) => {
-    if (!isWsOpen()) return;
-    const raw        = e.inputBuffer.getChannelData(0);
-    const downsampled = downsample(raw, state.audioCtx.sampleRate, 16000);
-    const pcm        = float32ToInt16(downsampled);
-    send({ type: 'audio', data: bufToBase64(pcm.buffer) });
-    // Drive user waveform from raw amplitude
-    updateUserWaveform(raw);
-  };
-
-  mixer.connect(proc);
-  proc.connect(state.audioCtx.destination);
-  state.scriptProcessor = proc;
+  // AudioWorklet — downsample to 16 kHz + Int16 conversion on the audio thread,
+  // off the main/UI thread (replaces the deprecated ScriptProcessorNode that janked).
+  try {
+    if (!state.workletReady) {
+      await state.audioCtx.audioWorklet.addModule('/res/js/pcm-worklet.js');
+      state.workletReady = true;
+    }
+    const node = new AudioWorkletNode(state.audioCtx, 'pcm-capture');
+    node.port.onmessage = (e) => {
+      if (!isWsOpen()) return;
+      const pcm = new Int16Array(e.data);
+      send({ type: 'audio', data: bufToBase64(pcm.buffer) });
+      updateUserWaveform(pcm);
+    };
+    mixer.connect(node);
+    node.connect(state.audioCtx.destination); // outputs silence; keeps the node pulled
+    state.workletNode = node;
+  } catch (err) {
+    console.error('AudioWorklet init failed:', err);
+  }
 
   animateMicBars();
   ensureUserMsg();
@@ -494,12 +504,12 @@ function setTranscript(msgEl, text, isModel = false) {
 }
 
 // Update user bubble waveform bars from microphone amplitude data
-function updateUserWaveform(raw) {
+function updateUserWaveform(pcm) {
   if (!state.currentUserMsg) return;
   const bars = state.currentUserMsg.querySelectorAll('.waveform span');
-  const step = Math.floor(raw.length / bars.length) || 1;
+  const step = Math.floor(pcm.length / bars.length) || 1;
   bars.forEach((bar, i) => {
-    const amp = Math.abs(raw[i * step] ?? 0);
+    const amp = Math.abs((pcm[i * step] ?? 0) / 32768); // Int16 → [0,1]
     bar.style.height = `${Math.max(3, Math.min(20, amp * 80))}px`;
   });
 }
@@ -530,6 +540,8 @@ function scrollToBottom() {
 }
 
 function applyScrollBlur() {
+  // Per-message blur filters spawn composited layers that corrupt on mobile GPUs.
+  if (IS_TOUCH) return;
   const allMsgs = messages.querySelectorAll('.message');
 
   // No scroll has happened yet — clear any residual blur and exit
@@ -572,8 +584,9 @@ function teardown() {
   }
   state.videoStream = null;
 
-  state.scriptProcessor?.disconnect();
-  state.scriptProcessor = null;
+  state.workletNode?.port.close();
+  state.workletNode?.disconnect();
+  state.workletNode = null;
 
   if (state.mediaElementSource) {
     state.mediaElementSource.disconnect();

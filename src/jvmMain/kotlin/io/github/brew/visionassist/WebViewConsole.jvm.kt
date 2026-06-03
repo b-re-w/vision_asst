@@ -5,7 +5,7 @@ import org.cef.CefSettings
 import org.cef.browser.CefBrowser
 import org.cef.handler.CefDisplayHandlerAdapter
 
-actual fun installWebViewConsoleLogger(webView: NativeWebView) {
+actual fun onWebViewCreated(webView: NativeWebView) {
     // IMPORTANT: JCEF's CefClient.addDisplayHandler only keeps the *first* handler
     // registered. This runs from onCreated — i.e. BEFORE the library registers its
     // own (no-op) display handler — so ours wins. Do NOT defer it.

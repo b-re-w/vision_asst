@@ -44,7 +44,7 @@ fun App() {
                     modifier = Modifier
                         .statusBarsPadding()
                         .fillMaxSize(),
-                    onCreated = { nativeWebView -> installWebViewConsoleLogger(nativeWebView) },
+                    onCreated = { nativeWebView -> onWebViewCreated(nativeWebView) },
                 )
             } else {
                 CircularProgressIndicator()

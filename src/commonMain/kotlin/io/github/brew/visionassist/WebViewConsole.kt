@@ -3,9 +3,10 @@ package io.github.brew.visionassist
 import com.multiplatform.webview.web.NativeWebView
 
 /**
- * Forward the page's `console.*` output to the app's stdout/log.
+ * Platform hook invoked once the native WebView is created.
  *
- * Desktop (JCEF) attaches a CefDisplayHandler. Android is a no-op — use Chrome's
- * chrome://inspect instead (WebView debugging is enabled in MainActivity).
+ * Desktop (JCEF): attach a CefDisplayHandler that forwards `console.*` to stdout.
+ * Android: paint an opaque dark background so the camera video overlay doesn't flash
+ * (use chrome://inspect for the console; WebView debugging is enabled in MainActivity).
  */
-expect fun installWebViewConsoleLogger(webView: NativeWebView)
+expect fun onWebViewCreated(webView: NativeWebView)
