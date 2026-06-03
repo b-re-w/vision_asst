@@ -484,6 +484,8 @@ private fun sendVoid(receiver: Pointer, selector: String, arg: Any) {
 private fun respondsToSelector(receiver: Pointer, selector: String): Boolean =
     (objc.getFunction("objc_msgSend")
         .invokeInt(arrayOf(receiver, sel("respondsToSelector:"), sel(selector))) and 0xFF) != 0
+private fun classNameOf(receiver: Pointer?): String =
+    receiver?.let { objc.getFunction("object_getClassName").invokePointer(arrayOf(it)).getString(0) } ?: "null"
 
 /**
  * macOS: give the borderless NSWindow a native shadow and round the content layer.
@@ -495,8 +497,12 @@ private fun respondsToSelector(receiver: Pointer, selector: String): Boolean =
  */
 private fun applyMacChrome(window: java.awt.Window) {
     runCatching {
-        val handle = Native.getWindowPointer(window) ?: return
-        val nsWindow = if (respondsToSelector(handle, "contentView")) handle else send(handle, "window")
+        val handle = Native.getWindowPointer(window)
+        println("[macChrome] handle=${handle} class=${classNameOf(handle)}")
+        if (handle == null) return
+        val isWindow = respondsToSelector(handle, "contentView")
+        val nsWindow = if (isWindow) handle else send(handle, "window")
+        println("[macChrome] handle isWindow=$isWindow -> nsWindow class=${classNameOf(nsWindow)}")
 
         // Native drop shadow (focus-aware, drawn by the OS).
         sendVoid(nsWindow, "setHasShadow:", 1)
@@ -507,9 +513,11 @@ private fun applyMacChrome(window: java.awt.Window) {
         // Round the content view's layer; masksToBounds clips the Skia/CEF sublayers
         // to the rounded rect.
         val contentView = send(nsWindow, "contentView")
-        sendVoid(contentView, "setWantsLayer:", 1)
         val layer = send(contentView, "layer")
+        println("[macChrome] contentView class=${classNameOf(contentView)} layer class=${classNameOf(layer)}")
+        sendVoid(contentView, "setWantsLayer:", 1)
         sendVoid(layer, "setCornerRadius:", WINDOW_CORNER_RADIUS)
         sendVoid(layer, "setMasksToBounds:", 1)
-    }
+        println("[macChrome] applied cornerRadius=$WINDOW_CORNER_RADIUS")
+    }.onFailure { println("[macChrome] FAILED: $it") }
 }
