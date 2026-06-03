@@ -116,31 +116,41 @@ tasks.matching { t ->
 }.configureEach { dependsOn(syncWebAssets) }
 
 
+// JVM flags JCEF/KCEF needs at runtime.
+//   - add-opens: lets JCEF launch the Chromium subprocess (deep reflection into AWT).
+//   - macOS add-exports: CefBrowserWindowMac reaches into sun.awt.AWTAccessor (and the
+//     lwawt packages); JPMS doesn't export those by default, so without these it throws
+//     "module java.desktop does not export sun.awt to unnamed module".
+val jcefJvmArgs: List<String> = buildList {
+    addAll(
+        listOf(
+            "--add-opens", "java.desktop/sun.awt=ALL-UNNAMED",
+            "--add-opens", "java.desktop/java.awt.peer=ALL-UNNAMED",
+        ),
+    )
+    if (System.getProperty("os.name").startsWith("Mac")) {
+        addAll(
+            listOf(
+                "--add-exports", "java.desktop/sun.awt=ALL-UNNAMED",
+                "--add-exports", "java.desktop/sun.lwawt=ALL-UNNAMED",
+                "--add-exports", "java.desktop/sun.lwawt.macosx=ALL-UNNAMED",
+            ),
+        )
+    }
+}
+
+// The IDE "run main" gutter executes a generated JavaExec task (e.g.
+// ":io.github.brew.visionassist.MainKt.main()") that does NOT inherit
+// compose.desktop's jvmArgs — so apply the same flags to every JavaExec run task.
+tasks.withType<JavaExec>().configureEach {
+    jvmArgs(jcefJvmArgs)
+}
+
 compose.desktop {
     application {
         mainClass = "io.github.brew.visionassist.MainKt"
 
-        // KCEF / JCEF needs these module openings to launch the Chromium process.
-        jvmArgs += listOf(
-            "--add-opens", "java.desktop/sun.awt=ALL-UNNAMED",
-            "--add-opens", "java.desktop/java.awt.peer=ALL-UNNAMED",
-        )
-
-        // macOS: CEF's message loop must run on the AppKit main thread (thread 0).
-        // Without this, JCEF initializes CefApp on a background thread and crashes
-        // with SIGSEGV in libjcef. (No-op / unneeded on Windows and Linux.)
-        //
-        // CefBrowserWindowMac also reaches into sun.awt.AWTAccessor, which JPMS does
-        // not export by default — without --add-exports it fails with "module
-        // java.desktop does not export sun.awt to unnamed module".
-        if (System.getProperty("os.name").startsWith("Mac")) {
-            jvmArgs += listOf(
-                "-XstartOnFirstThread",
-                "--add-exports", "java.desktop/sun.awt=ALL-UNNAMED",
-                "--add-exports", "java.desktop/sun.lwawt=ALL-UNNAMED",
-                "--add-exports", "java.desktop/sun.lwawt.macosx=ALL-UNNAMED",
-            )
-        }
+        jvmArgs += jcefJvmArgs
 
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
