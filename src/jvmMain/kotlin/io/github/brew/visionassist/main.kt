@@ -490,7 +490,8 @@ private fun classNameOf(receiver: Pointer?): String =
  * reflect through the AWT peer instead:
  *   AWTAccessor.getComponentAccessor().getPeer(window)  // sun.lwawt.LWWindowPeer
  *     .getPlatformWindow()                              // sun.lwawt.macosx.CPlatformWindow
- *     .getNSWindowPtr()                                 // long
+ * Modern JDKs dropped CPlatformWindow.getNSWindowPtr(); the NSWindow pointer now lives
+ * in the `ptr` field of its CFRetainedResource superclass, so we read that field.
  * All by name so the code still compiles on non-macOS JDKs (those classes are absent).
  */
 private fun macNSWindowPointer(window: java.awt.Window): Pointer? = runCatching {
@@ -504,12 +505,24 @@ private fun macNSWindowPointer(window: java.awt.Window): Pointer? = runCatching 
         .getMethod("getPlatformWindow")
         .apply { isAccessible = true }
         .invoke(peer) ?: return@runCatching null
-    val ptr = platformWindow.javaClass
-        .getMethod("getNSWindowPtr")
-        .apply { isAccessible = true }
-        .invoke(platformWindow) as Long
+    val ptr = findFieldInHierarchy(platformWindow.javaClass, "ptr")
+        ?.apply { isAccessible = true }
+        ?.getLong(platformWindow) ?: return@runCatching null
     if (ptr == 0L) null else Pointer(ptr)
 }.getOrElse { println("[macChrome] NSWindow lookup failed: $it"); null }
+
+/** Find a declared field by name, walking up the superclass chain. */
+private fun findFieldInHierarchy(start: Class<*>, name: String): java.lang.reflect.Field? {
+    var cls: Class<*>? = start
+    while (cls != null) {
+        try {
+            return cls.getDeclaredField(name)
+        } catch (_: NoSuchFieldException) {
+            cls = cls.superclass
+        }
+    }
+    return null
+}
 
 /** macOS: give the borderless NSWindow a native shadow and round the content layer. */
 private fun applyMacChrome(window: java.awt.Window) {
