@@ -36,7 +36,13 @@ actual fun rememberWebViewReady(): Boolean {
                     // Only render the WebView once CefApp is fully INITIALIZED —
                     // creating it earlier makes createContext() return null (NPE).
                     progress {
-                        onInitialized { ready = true }
+                        onDownloading { pct -> println("[KCEF] downloading Chromium bundle: $pct%") }
+                        onExtracting { println("[KCEF] extracting bundle…") }
+                        onInstall { println("[KCEF] installing bundle…") }
+                        onInitialized {
+                            println("[KCEF] initialized")
+                            ready = true
+                        }
                     }
                     // The page loads from http://127.0.0.1 (a secure context), so no
                     // origin hack is needed. We still auto-accept the media prompt
