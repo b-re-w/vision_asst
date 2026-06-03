@@ -481,24 +481,31 @@ private fun send(receiver: Pointer, selector: String): Pointer =
 private fun sendVoid(receiver: Pointer, selector: String, arg: Any) {
     objc.getFunction("objc_msgSend").invokeVoid(arrayOf(receiver, sel(selector), arg))
 }
+private fun respondsToSelector(receiver: Pointer, selector: String): Boolean =
+    (objc.getFunction("objc_msgSend")
+        .invokeInt(arrayOf(receiver, sel("respondsToSelector:"), sel(selector))) and 0xFF) != 0
 
 /**
  * macOS: give the borderless NSWindow a native shadow and round the content layer.
  *
- * NOTE: untested on macOS hardware. If corners/shadow don't appear, the likely cause
- * is [Native.getWindowPointer] returning the NSView rather than the NSWindow — in that
- * case fetch the window with `send(handle, "window")` first.
+ * [Native.getWindowPointer] hands back either the NSWindow or its NSView depending on
+ * the JDK/JNA build; only NSWindow responds to `contentView`, so we normalize to the
+ * window first. Without that, the chrome calls land on the wrong object and silently
+ * no-op (window stays square) — which is exactly what happened on this hardware.
  */
 private fun applyMacChrome(window: java.awt.Window) {
     runCatching {
-        val nsWindow = Native.getWindowPointer(window) ?: return
+        val handle = Native.getWindowPointer(window) ?: return
+        val nsWindow = if (respondsToSelector(handle, "contentView")) handle else send(handle, "window")
+
         // Native drop shadow (focus-aware, drawn by the OS).
         sendVoid(nsWindow, "setHasShadow:", 1)
         // Make the window non-opaque with a clear background so the rounded corners
         // aren't filled in by the square window backdrop.
         sendVoid(nsWindow, "setOpaque:", 0)
         sendVoid(nsWindow, "setBackgroundColor:", send(cls("NSColor"), "clearColor"))
-        // Round the content view's layer.
+        // Round the content view's layer; masksToBounds clips the Skia/CEF sublayers
+        // to the rounded rect.
         val contentView = send(nsWindow, "contentView")
         sendVoid(contentView, "setWantsLayer:", 1)
         val layer = send(contentView, "layer")
