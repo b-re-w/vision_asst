@@ -481,28 +481,44 @@ private fun send(receiver: Pointer, selector: String): Pointer =
 private fun sendVoid(receiver: Pointer, selector: String, arg: Any) {
     objc.getFunction("objc_msgSend").invokeVoid(arrayOf(receiver, sel(selector), arg))
 }
-private fun respondsToSelector(receiver: Pointer, selector: String): Boolean =
-    (objc.getFunction("objc_msgSend")
-        .invokeInt(arrayOf(receiver, sel("respondsToSelector:"), sel(selector))) and 0xFF) != 0
 private fun classNameOf(receiver: Pointer?): String =
     receiver?.let { objc.getFunction("object_getClassName").invokePointer(arrayOf(it)).getString(0) } ?: "null"
 
 /**
- * macOS: give the borderless NSWindow a native shadow and round the content layer.
- *
- * [Native.getWindowPointer] hands back either the NSWindow or its NSView depending on
- * the JDK/JNA build; only NSWindow responds to `contentView`, so we normalize to the
- * window first. Without that, the chrome calls land on the wrong object and silently
- * no-op (window stays square) — which is exactly what happened on this hardware.
+ * Resolve the NSWindow pointer for a Compose/AWT window. [Native.getWindowPointer]
+ * returns nil on modern macOS (the JAWT surface is a CALayer, not an NSWindow), so we
+ * reflect through the AWT peer instead:
+ *   AWTAccessor.getComponentAccessor().getPeer(window)  // sun.lwawt.LWWindowPeer
+ *     .getPlatformWindow()                              // sun.lwawt.macosx.CPlatformWindow
+ *     .getNSWindowPtr()                                 // long
+ * All by name so the code still compiles on non-macOS JDKs (those classes are absent).
  */
+private fun macNSWindowPointer(window: java.awt.Window): Pointer? = runCatching {
+    val accessor = Class.forName("sun.awt.AWTAccessor")
+        .getMethod("getComponentAccessor").invoke(null)
+    val peer = accessor.javaClass
+        .getMethod("getPeer", java.awt.Component::class.java)
+        .apply { isAccessible = true }
+        .invoke(accessor, window) ?: return@runCatching null
+    val platformWindow = peer.javaClass
+        .getMethod("getPlatformWindow")
+        .apply { isAccessible = true }
+        .invoke(peer) ?: return@runCatching null
+    val ptr = platformWindow.javaClass
+        .getMethod("getNSWindowPtr")
+        .apply { isAccessible = true }
+        .invoke(platformWindow) as Long
+    if (ptr == 0L) null else Pointer(ptr)
+}.getOrElse { println("[macChrome] NSWindow lookup failed: $it"); null }
+
+/** macOS: give the borderless NSWindow a native shadow and round the content layer. */
 private fun applyMacChrome(window: java.awt.Window) {
     runCatching {
-        val handle = Native.getWindowPointer(window)
-        println("[macChrome] handle=${handle} class=${classNameOf(handle)}")
-        if (handle == null) return
-        val isWindow = respondsToSelector(handle, "contentView")
-        val nsWindow = if (isWindow) handle else send(handle, "window")
-        println("[macChrome] handle isWindow=$isWindow -> nsWindow class=${classNameOf(nsWindow)}")
+        val nsWindow = macNSWindowPointer(window) ?: run {
+            println("[macChrome] no NSWindow pointer; skipping")
+            return
+        }
+        println("[macChrome] nsWindow class=${classNameOf(nsWindow)}")
 
         // Native drop shadow (focus-aware, drawn by the OS).
         sendVoid(nsWindow, "setHasShadow:", 1)

@@ -134,6 +134,11 @@ val jcefJvmArgs: List<String> = buildList {
                 "--add-exports", "java.desktop/sun.awt=ALL-UNNAMED",
                 "--add-exports", "java.desktop/sun.lwawt=ALL-UNNAMED",
                 "--add-exports", "java.desktop/sun.lwawt.macosx=ALL-UNNAMED",
+                // Rounded-corner chrome reflects into the AWT peer to reach the NSWindow
+                // (AWTAccessor -> LWWindowPeer.getPlatformWindow -> getNSWindowPtr);
+                // setAccessible on those internal members needs the packages opened.
+                "--add-opens", "java.desktop/sun.lwawt=ALL-UNNAMED",
+                "--add-opens", "java.desktop/sun.lwawt.macosx=ALL-UNNAMED",
             ),
         )
     }
