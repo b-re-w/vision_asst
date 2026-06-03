@@ -484,6 +484,36 @@ private fun sendVoid(receiver: Pointer, selector: String, arg: Any) {
 private fun classNameOf(receiver: Pointer?): String =
     receiver?.let { objc.getFunction("object_getClassName").invokePointer(arrayOf(it)).getString(0) } ?: "null"
 
+// AppKit (NSWindow/NSView) APIs must run on the main thread; calling them off it makes
+// the OS Main Thread Checker trap (SIGTRAP / exit 133). libcdispatch lets us hop onto the
+// AppKit main queue. libdispatch is re-exported through libSystem.
+private val systemLib: NativeLibrary by lazy { NativeLibrary.getInstance("System") }
+
+/** dispatch_function_t: `void (*)(void* context)`. */
+private interface DispatchWork : com.sun.jna.Callback {
+    fun callback(context: Pointer?)
+}
+
+// Strong reference so JNA doesn't garbage-collect the callback before the async block
+// runs on the main thread.
+private var pendingMainThreadWork: DispatchWork? = null
+
+/** Run [block] on the macOS AppKit main thread (asynchronously, via the main queue). */
+private fun runOnMacMainThread(block: () -> Unit) {
+    val mainQueue = systemLib.getGlobalVariableAddress("_dispatch_main_q")
+    val work = object : DispatchWork {
+        override fun callback(context: Pointer?) {
+            try {
+                block()
+            } finally {
+                pendingMainThreadWork = null
+            }
+        }
+    }
+    pendingMainThreadWork = work
+    systemLib.getFunction("dispatch_async_f").invokeVoid(arrayOf(mainQueue, Pointer.NULL, work))
+}
+
 /**
  * Resolve the NSWindow pointer for a Compose/AWT window. [Native.getWindowPointer]
  * returns nil on modern macOS (the JAWT surface is a CALayer, not an NSWindow), so we
@@ -526,27 +556,30 @@ private fun findFieldInHierarchy(start: Class<*>, name: String): java.lang.refle
 
 /** macOS: give the borderless NSWindow a native shadow and round the content layer. */
 private fun applyMacChrome(window: java.awt.Window) {
-    runCatching {
-        val nsWindow = macNSWindowPointer(window) ?: run {
-            println("[macChrome] no NSWindow pointer; skipping")
-            return
-        }
-        println("[macChrome] nsWindow class=${classNameOf(nsWindow)}")
+    val nsWindow = macNSWindowPointer(window) ?: run {
+        println("[macChrome] no NSWindow pointer; skipping")
+        return
+    }
+    println("[macChrome] nsWindow class=${classNameOf(nsWindow)}")
 
-        // Native drop shadow (focus-aware, drawn by the OS).
-        sendVoid(nsWindow, "setHasShadow:", 1)
-        // Make the window non-opaque with a clear background so the rounded corners
-        // aren't filled in by the square window backdrop.
-        sendVoid(nsWindow, "setOpaque:", 0)
-        sendVoid(nsWindow, "setBackgroundColor:", send(cls("NSColor"), "clearColor"))
-        // Round the content view's layer; masksToBounds clips the Skia/CEF sublayers
-        // to the rounded rect.
-        val contentView = send(nsWindow, "contentView")
-        val layer = send(contentView, "layer")
-        println("[macChrome] contentView class=${classNameOf(contentView)} layer class=${classNameOf(layer)}")
-        sendVoid(contentView, "setWantsLayer:", 1)
-        sendVoid(layer, "setCornerRadius:", WINDOW_CORNER_RADIUS)
-        sendVoid(layer, "setMasksToBounds:", 1)
-        println("[macChrome] applied cornerRadius=$WINDOW_CORNER_RADIUS")
-    }.onFailure { println("[macChrome] FAILED: $it") }
+    // AppKit calls below MUST run on the main thread (see runOnMacMainThread).
+    runOnMacMainThread {
+        runCatching {
+            // Native drop shadow (focus-aware, drawn by the OS).
+            sendVoid(nsWindow, "setHasShadow:", 1)
+            // Make the window non-opaque with a clear background so the rounded corners
+            // aren't filled in by the square window backdrop.
+            sendVoid(nsWindow, "setOpaque:", 0)
+            sendVoid(nsWindow, "setBackgroundColor:", send(cls("NSColor"), "clearColor"))
+            // Round the content view's layer; masksToBounds clips the Skia/CEF sublayers
+            // to the rounded rect.
+            val contentView = send(nsWindow, "contentView")
+            val layer = send(contentView, "layer")
+            println("[macChrome] contentView class=${classNameOf(contentView)} layer class=${classNameOf(layer)}")
+            sendVoid(contentView, "setWantsLayer:", 1)
+            sendVoid(layer, "setCornerRadius:", WINDOW_CORNER_RADIUS)
+            sendVoid(layer, "setMasksToBounds:", 1)
+            println("[macChrome] applied cornerRadius=$WINDOW_CORNER_RADIUS")
+        }.onFailure { println("[macChrome] FAILED: $it") }
+    }
 }
