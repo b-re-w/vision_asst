@@ -129,8 +129,17 @@ compose.desktop {
         // macOS: CEF's message loop must run on the AppKit main thread (thread 0).
         // Without this, JCEF initializes CefApp on a background thread and crashes
         // with SIGSEGV in libjcef. (No-op / unneeded on Windows and Linux.)
+        //
+        // CefBrowserWindowMac also reaches into sun.awt.AWTAccessor, which JPMS does
+        // not export by default — without --add-exports it fails with "module
+        // java.desktop does not export sun.awt to unnamed module".
         if (System.getProperty("os.name").startsWith("Mac")) {
-            jvmArgs += "-XstartOnFirstThread"
+            jvmArgs += listOf(
+                "-XstartOnFirstThread",
+                "--add-exports", "java.desktop/sun.awt=ALL-UNNAMED",
+                "--add-exports", "java.desktop/sun.lwawt=ALL-UNNAMED",
+                "--add-exports", "java.desktop/sun.lwawt.macosx=ALL-UNNAMED",
+            )
         }
 
         nativeDistributions {
