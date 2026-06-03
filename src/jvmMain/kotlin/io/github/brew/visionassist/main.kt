@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.window.WindowDraggableArea
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
@@ -110,6 +113,8 @@ fun main() = application {
 }
 
 
+private val isMacOs = System.getProperty("os.name").orEmpty().startsWith("Mac")
+
 private val TitleBarColor = Color(0xFF15151A)
 private val TitleTextColor = Color(0xFFE8E8EC)
 private val WindowEdgeColor = Color(0xFF06090F) // matches the page background
@@ -138,6 +143,11 @@ private fun TitleBarRow(windowState: WindowState) {
             .background(TitleBarColor),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // macOS convention: circular close/minimize/zoom "traffic lights" on the LEFT.
+        if (isMacOs) {
+            MacTrafficLights(windowState)
+        }
+
         // Title region. Detect double-click WITHOUT consuming the event, so the
         // parent WindowDraggableArea still gets the drag (combinedClickable would
         // swallow the press and break drag-to-move).
@@ -159,7 +169,7 @@ private fun TitleBarRow(windowState: WindowState) {
                         lastPress = now
                     }
                 }
-                .padding(start = 14.dp),
+                .padding(start = if (isMacOs) 8.dp else 14.dp),
             contentAlignment = Alignment.CenterStart,
         ) {
             Text(
@@ -169,12 +179,16 @@ private fun TitleBarRow(windowState: WindowState) {
                 fontWeight = FontWeight.Medium,
             )
         }
-        TitleBarButton(glyph = "—", onClick = { windowState.isMinimized = true })
-        TitleBarButton(
-            glyph = if (windowState.placement == WindowPlacement.Maximized) "❐" else "▢",
-            onClick = { toggleMaximize(windowState) },
-        )
-        TitleBarButton(glyph = "✕", hoverColor = Color(0xFFE53935), onClick = { closeApp() })
+
+        // Windows/Linux convention: square min/max/close buttons on the RIGHT.
+        if (!isMacOs) {
+            TitleBarButton(glyph = "—", onClick = { windowState.isMinimized = true })
+            TitleBarButton(
+                glyph = if (windowState.placement == WindowPlacement.Maximized) "❐" else "▢",
+                onClick = { toggleMaximize(windowState) },
+            )
+            TitleBarButton(glyph = "✕", hoverColor = Color(0xFFE53935), onClick = { closeApp() })
+        }
     }
 }
 
@@ -195,6 +209,57 @@ private fun TitleBarButton(
         contentAlignment = Alignment.Center,
     ) {
         Text(text = glyph, color = TitleTextColor, fontSize = 13.sp)
+    }
+}
+
+
+// ─── macOS traffic-light window controls ────────────────────────────────────────
+
+private val MacCloseColor = Color(0xFFFF5F57)
+private val MacMinimizeColor = Color(0xFFFEBC2E)
+private val MacZoomColor = Color(0xFF28C840)
+private val MacGlyphColor = Color(0xCC1A1A1A) // dark, drawn on the lit button
+
+/**
+ * macOS close / minimize / zoom buttons: circular, left-aligned, in that order.
+ * Per the platform convention the glyphs only appear while the pointer is over the
+ * group, so we hover-track the whole row rather than each button.
+ */
+@Composable
+private fun MacTrafficLights(windowState: WindowState) {
+    val groupInteraction = remember { MutableInteractionSource() }
+    val hovered by groupInteraction.collectIsHoveredAsState()
+    Row(
+        modifier = Modifier
+            .hoverable(groupInteraction)
+            .padding(start = 12.dp, end = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TrafficLight(MacCloseColor, if (hovered) "✕" else null) { closeApp() }
+        TrafficLight(MacMinimizeColor, if (hovered) "−" else null) { windowState.isMinimized = true }
+        TrafficLight(MacZoomColor, if (hovered) "+" else null) { toggleMaximize(windowState) }
+    }
+}
+
+@Composable
+private fun TrafficLight(color: Color, glyph: String?, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(12.dp)
+            .clip(CircleShape)
+            .background(color)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (glyph != null) {
+            Text(
+                text = glyph,
+                color = MacGlyphColor,
+                fontSize = 8.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
     }
 }
 
