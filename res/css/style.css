@@ -555,10 +555,8 @@
       .container {
         backdrop-filter: none; /* the single biggest mobile cost */
         -webkit-backdrop-filter: none;
-        background: rgba(8, 11, 20, 0.94);
-        box-shadow: none;      /* large blurred shadows corrupt mobile GPU tiles */
+        background: #0a0e16;   /* opaque — avoid translucent-blend artifacts */
       }
-      .camera-frame { box-shadow: none; }
       .logo { filter: none; }
       /* mask-image forces a composited layer that corrupts into stale rectangles on
          some mobile WebView GPU drivers — drop the chat fade mask on touch. */
@@ -566,7 +564,11 @@
         mask-image: none;
         -webkit-mask-image: none;
       }
-      /* Persistent composited layers (will-change / filters) leave stale rectangles
-         on some mobile WebView GPU drivers — flatten them. */
-      *, *::before, *::after { will-change: auto !important; }
+      /* Flatten every GPU-compositing trigger (blurred box-shadow glows, persistent
+         will-change layers) — these corrupt into stale rectangles on some mobile
+         WebView GPU drivers. */
+      *, *::before, *::after {
+        box-shadow: none !important;
+        will-change: auto !important;
+      }
     }
