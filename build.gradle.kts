@@ -125,6 +125,7 @@ val jcefJvmArgs: List<String> = buildList {
     addAll(
         listOf(
             "--add-opens", "java.desktop/sun.awt=ALL-UNNAMED",
+            "--add-opens", "java.desktop/java.awt=ALL-UNNAMED",
             "--add-opens", "java.desktop/java.awt.peer=ALL-UNNAMED",
         ),
     )
