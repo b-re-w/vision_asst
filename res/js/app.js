@@ -159,6 +159,7 @@ async function geminiConnect() {
       model: GEMINI_MODEL,
       config: {
         responseModalities: [Modality.AUDIO],
+        temperature: 0.3,
         inputAudioTranscription: {},
         outputAudioTranscription: {},
       },

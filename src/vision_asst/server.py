@@ -84,6 +84,8 @@ token_client = genai.Client(
 LIVE_CONFIG = types.LiveConnectConfig(
     response_modalities=[types.Modality.AUDIO],
     system_instruction=types.Content(parts=[types.Part(text=SYSTEM_PROMPT)]),
+    # Low temperature keeps guidance accurate and consistent over creative.
+    temperature=0.3,
     output_audio_transcription=types.AudioTranscriptionConfig(),
     input_audio_transcription=types.AudioTranscriptionConfig(),
     speech_config=types.SpeechConfig(
