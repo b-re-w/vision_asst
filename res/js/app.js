@@ -116,6 +116,7 @@ const state = {
   useMic:              false,
   mediaElementSource:  null,
   micSource:           null,
+  demoRunning:         false,   // true while a scripted demo is playing
 };
 
 const BAR_COUNT = 12;
@@ -142,6 +143,71 @@ function base64ToInt16(b64) {
 // voice) server-side, so the client cannot change them.
 const GEMINI_MODEL = 'gemini-3.1-flash-live-preview';
 const GENAI_SDK_URL = 'https://cdn.jsdelivr.net/npm/@google/genai@1/+esm';
+
+// ─── Demo mode (scripted playback for recordings) ─────────────────────────────
+// Keyed by the video filename stem. Open the page with ?video=/res/<stem>.mp4 and,
+// if the stem matches an entry, we play a fixed conversation instead of connecting
+// to Gemini: a faked user question (as if voice-recognised) plus an assistant reply
+// whose audio is a pre-generated TTS clip (res/<stem>.wav). No mic, token, or
+// network is used — the dialogue is identical on every run, for clean recordings.
+const DEMO_SCRIPTS = {
+  after3: {
+    audio: '/res/after3.wav',
+    user: '저 표지판 뭐라고 되어 있어?',
+    assistant: '어두워서 잘 보이지 않지만 어린이 보호 구역 표지판인 것으로 보여요.',
+    userAtMs:      1500,  // when the user's question appears after play starts
+    listenMs:       900,  // how long the user "listening" waveform shows first
+    assistantAtMs: 3200,  // when the assistant starts speaking
+  },
+};
+
+function getDemoScript() {
+  const v = new URLSearchParams(window.location.search).get('video');
+  if (!v) return null;
+  const stem = v.split('/').pop().replace(/\.[^.]+$/, '');
+  return DEMO_SCRIPTS[stem] || null;
+}
+
+// Play the scripted demo. setupCamera() must have started the video already.
+async function runDemo(script) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
+
+  // Mimic the live UI chrome without opening a real session.
+  statusDot.classList.add('connected');
+  btnToggle.textContent = 'Disconnect';
+  btnToggle.classList.add('live');
+  btnToggle.disabled = false;
+  recDot.classList.add('active');
+  micRing.classList.add('active');
+  video.muted = true;  // keep the scripted assistant voice clean over the clip
+
+  // 1) User question — brief "listening" waveform, then the recognised text.
+  await wait(script.userAtMs);
+  ensureUserMsg();
+  setWaveformLive(state.currentUserMsg, true);
+  await wait(script.listenMs);
+  setTranscript(state.currentUserMsg, script.user, false);
+  sealUserMsg();
+
+  // 2) Assistant reply — play the pre-generated audio and reveal the text.
+  await wait(script.assistantAtMs - script.userAtMs - script.listenMs);
+  ensureModelMsg();
+  setWaveformLive(state.currentModelMsg, true);
+  setTranscript(state.currentModelMsg, script.assistant, true);
+
+  const audio = new Audio(script.audio);
+  audio.addEventListener('ended', () => {
+    sealModelMsg();
+    recDot.classList.remove('active');
+    micRing.classList.remove('active');
+  });
+  try {
+    await audio.play();
+  } catch (e) {
+    console.warn('Demo audio play blocked:', e);
+    showToast('데모 음성 재생 실패', 'error');
+  }
+}
 
 async function geminiConnect() {
   if (!state.token) {
@@ -676,7 +742,21 @@ async function acquireToken() {
 }
 
 // ─── Button ───────────────────────────────────────────────────────────────────
+const demoScript = getDemoScript();
+
 btnToggle.addEventListener('click', async () => {
+  // Demo mode: a single click starts the scripted playback (needed for the user
+  // gesture that unblocks audio/video autoplay). Ignore further clicks.
+  if (demoScript) {
+    if (state.demoRunning) return;
+    state.demoRunning = true;
+    btnToggle.disabled = true;
+    btnToggle.textContent = 'Connecting…';
+    await setupCamera();
+    runDemo(demoScript);
+    return;
+  }
+
   if (isWsOpen()) {
     state.manualDisconnect = true;   // mark as intentional
     disconnect();
